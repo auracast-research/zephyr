@@ -1,7 +1,4 @@
-.. _max32666_fthr:
-
-MAX32666FTHR
-############
+.. zephyr:board:: max32666fthr
 
 Overview
 ********
@@ -126,6 +123,8 @@ Below interfaces are supported by Zephyr on MAX32666FTHR.
 | PWM       | on-chip    | pwm                                 |
 +-----------+------------+-------------------------------------+
 | W1        | on-chip    | one wire master                     |
++-----------+------------+-------------------------------------+
+| Flash     | on-chip    | flash                               |
 +-----------+------------+-------------------------------------+
 
 Connections and IOs

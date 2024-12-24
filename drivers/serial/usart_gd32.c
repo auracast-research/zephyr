@@ -167,7 +167,7 @@ int usart_gd32_fifo_fill(const struct device *dev, const uint8_t *tx_data,
 			 int len)
 {
 	const struct gd32_usart_config *const cfg = dev->config;
-	uint8_t num_tx = 0U;
+	int num_tx = 0U;
 
 	while ((len - num_tx > 0) &&
 	       usart_flag_get(cfg->reg, USART_FLAG_TBE)) {
@@ -181,7 +181,7 @@ int usart_gd32_fifo_read(const struct device *dev, uint8_t *rx_data,
 			 const int size)
 {
 	const struct gd32_usart_config *const cfg = dev->config;
-	uint8_t num_rx = 0U;
+	int num_rx = 0U;
 
 	while ((size - num_rx > 0) &&
 	       usart_flag_get(cfg->reg, USART_FLAG_RBNE)) {
@@ -284,7 +284,7 @@ void usart_gd32_irq_callback_set(const struct device *dev,
 }
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
 
-static const struct uart_driver_api usart_gd32_driver_api = {
+static DEVICE_API(uart, usart_gd32_driver_api) = {
 	.poll_in = usart_gd32_poll_in,
 	.poll_out = usart_gd32_poll_out,
 	.err_check = usart_gd32_err_check,

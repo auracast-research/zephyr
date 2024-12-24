@@ -12,13 +12,8 @@
 #include <hal/nrf_vpr_csr.h>
 #include <hal/nrf_vpr_csr_vevif.h>
 
-#if defined(CONFIG_SOC_NRF54L15_ENGA_CPUFLPR)
-#define TASKS_IDX_MIN 11U
-#define TASKS_IDX_MAX 17U
-#else
 #define TASKS_IDX_MIN NRF_VPR_TASKS_TRIGGER_MIN
 #define TASKS_IDX_MAX NRF_VPR_TASKS_TRIGGER_MAX
-#endif
 
 #define VEVIF_TASKS_NUM  DT_INST_PROP(0, nordic_tasks)
 #define VEVIF_TASKS_MASK DT_INST_PROP(0, nordic_tasks_mask)
@@ -110,7 +105,7 @@ static int vevif_task_rx_set_enabled(const struct device *dev, uint32_t id, bool
 	return 0;
 }
 
-static const struct mbox_driver_api vevif_task_rx_driver_api = {
+static DEVICE_API(mbox, vevif_task_rx_driver_api) = {
 	.max_channels_get = vevif_task_rx_max_channels_get,
 	.register_callback = vevif_task_rx_register_callback,
 	.set_enabled = vevif_task_rx_set_enabled,

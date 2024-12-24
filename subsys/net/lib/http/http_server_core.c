@@ -12,6 +12,8 @@
 #include <string.h>
 #include <strings.h>
 
+#include <zephyr/fs/fs.h>
+#include <zephyr/fs/fs_interface.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/net/http/service.h>
@@ -55,6 +57,10 @@ struct http_server_ctx {
 static struct http_server_ctx server_ctx;
 static K_SEM_DEFINE(server_start, 0, 1);
 static bool server_running;
+
+#if defined(CONFIG_HTTP_SERVER_TLS_USE_ALPN)
+static const char *const alpn_list[] = {"h2", "http/1.1"};
+#endif
 
 static void close_client_connection(struct http_client_ctx *client);
 
@@ -163,8 +169,8 @@ int http_server_init(struct http_server_ctx *ctx)
 		if (IS_ENABLED(CONFIG_NET_IPV4_MAPPING_TO_IPV6)) {
 			int optval = 0;
 
-			(void)setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
-					 &optval, sizeof(optval));
+			(void)zsock_setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &optval,
+					       sizeof(optval));
 		}
 
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
@@ -183,8 +189,17 @@ int http_server_init(struct http_server_ctx *ctx)
 				zsock_close(fd);
 				continue;
 			}
+
+#if defined(CONFIG_HTTP_SERVER_TLS_USE_ALPN)
+			if (zsock_setsockopt(fd, SOL_TLS, TLS_ALPN_LIST, alpn_list,
+					     sizeof(alpn_list)) < 0) {
+				LOG_ERR("setsockopt: %d", errno);
+				zsock_close(fd);
+				continue;
+			}
+#endif /* defined(CONFIG_HTTP_SERVER_TLS_USE_ALPN) */
 		}
-#endif
+#endif /* defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS) */
 
 		if (zsock_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1},
 				     sizeof(int)) < 0) {
@@ -290,6 +305,7 @@ static void client_release_resources(struct http_client_ctx *client)
 {
 	struct http_resource_detail *detail;
 	struct http_resource_detail_dynamic *dynamic_detail;
+	struct http_request_ctx request_ctx;
 	struct http_response_ctx response_ctx;
 
 	HTTP_SERVICE_FOREACH(service) {
@@ -316,8 +332,10 @@ static void client_release_resources(struct http_client_ctx *client)
 				continue;
 			}
 
-			dynamic_detail->cb(client, HTTP_SERVER_DATA_ABORTED, NULL, 0, &response_ctx,
-					   dynamic_detail->user_data);
+			populate_request_ctx(&request_ctx, NULL, 0, NULL);
+
+			dynamic_detail->cb(client, HTTP_SERVER_DATA_ABORTED, &request_ctx,
+					   &response_ctx, dynamic_detail->user_data);
 		}
 	}
 }
@@ -406,11 +424,11 @@ static int handle_http_preface(struct http_client_ctx *client)
 		return -EAGAIN;
 	}
 
-#if defined(CONFIG_HTTP_SERVER_CAPTURE_HEADERS)
-	client->header_capture_ctx.count = 0;
-	client->header_capture_ctx.cursor = 0;
-	client->header_capture_ctx.status = HTTP_HEADER_STATUS_OK;
-#endif /* defined(CONFIG_HTTP_SERVER_CAPTURE_HEADERS) */
+	if (IS_ENABLED(CONFIG_HTTP_SERVER_CAPTURE_HEADERS)) {
+		client->header_capture_ctx.count = 0;
+		client->header_capture_ctx.cursor = 0;
+		client->header_capture_ctx.status = HTTP_HEADER_STATUS_OK;
+	}
 
 	if (strncmp(client->cursor, HTTP2_PREFACE, sizeof(HTTP2_PREFACE) - 1) != 0) {
 		return enter_http1_request(client);
@@ -758,7 +776,13 @@ void http_server_get_content_type_from_extension(char *url, char *content_type,
 	size_t url_len = strlen(url);
 
 	HTTP_SERVER_CONTENT_TYPE_FOREACH(ct) {
-		char *ext = &url[url_len - ct->extension_len];
+		char *ext;
+
+		if (url_len <= ct->extension_len) {
+			continue;
+		}
+
+		ext = &url[url_len - ct->extension_len];
 
 		if (strncmp(ext, ct->extension, ct->extension_len) == 0) {
 			strncpy(content_type, ct->content_type, content_type_size);
@@ -806,6 +830,23 @@ bool http_response_is_provided(struct http_response_ctx *rsp)
 	}
 
 	return false;
+}
+
+void populate_request_ctx(struct http_request_ctx *req_ctx, uint8_t *data, size_t len,
+			  struct http_header_capture_ctx *header_ctx)
+{
+	req_ctx->data = data;
+	req_ctx->data_len = len;
+
+	if (NULL == header_ctx || header_ctx->status == HTTP_HEADER_STATUS_NONE) {
+		req_ctx->headers = NULL;
+		req_ctx->header_count = 0;
+		req_ctx->headers_status = HTTP_HEADER_STATUS_NONE;
+	} else {
+		req_ctx->headers = header_ctx->headers;
+		req_ctx->header_count = header_ctx->count;
+		req_ctx->headers_status = header_ctx->status;
+	}
 }
 
 int http_server_start(void)

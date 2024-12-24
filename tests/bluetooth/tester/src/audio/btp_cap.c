@@ -104,13 +104,13 @@ static void unicast_start_complete_cb(int err, struct bt_conn *conn)
 
 	if (err != 0) {
 		LOG_DBG("Failed to unicast-start, err %d", err);
-		btp_send_cap_unicast_start_completed_ev(u_group->cig->index,
+		btp_send_cap_unicast_start_completed_ev(u_group->cig_id,
 							BTP_CAP_UNICAST_START_STATUS_FAILED);
 
 		return;
 	}
 
-	btp_send_cap_unicast_start_completed_ev(u_group->cig->index,
+	btp_send_cap_unicast_start_completed_ev(u_group->cig_id,
 						BTP_CAP_UNICAST_START_STATUS_SUCCESS);
 }
 
@@ -129,13 +129,13 @@ static void unicast_stop_complete_cb(int err, struct bt_conn *conn)
 
 	if (err != 0) {
 		LOG_DBG("Failed to unicast-stop, err %d", err);
-		btp_send_cap_unicast_stop_completed_ev(u_group->cig->index,
+		btp_send_cap_unicast_stop_completed_ev(u_group->cig_id,
 						       BTP_CAP_UNICAST_START_STATUS_FAILED);
 
 		return;
 	}
 
-	btp_send_cap_unicast_stop_completed_ev(u_group->cig->index,
+	btp_send_cap_unicast_stop_completed_ev(u_group->cig_id,
 					       BTP_CAP_UNICAST_START_STATUS_SUCCESS);
 }
 
@@ -438,7 +438,7 @@ static uint8_t btp_cap_unicast_audio_stop(const void *cmd, uint16_t cmd_len,
 	param.streams = streams;
 	param.count = stream_cnt;
 	param.type = BT_CAP_SET_TYPE_AD_HOC;
-	param.release = true;
+	param.release = (cp->flags & BTP_CAP_UNICAST_AUDIO_STOP_FLAG_RELEASE) != 0;
 
 	err = bt_cap_initiator_unicast_audio_stop(&param);
 	if (err != 0) {
@@ -534,6 +534,7 @@ static int cap_broadcast_source_adv_setup(struct btp_bap_broadcast_local_source 
 {
 	int err;
 	struct bt_le_adv_param param = *BT_LE_EXT_ADV_NCONN;
+	uint32_t broadcast_id;
 
 	NET_BUF_SIMPLE_DEFINE(ad_buf, BT_UUID_SIZE_16 + BT_AUDIO_BROADCAST_ID_SIZE);
 	NET_BUF_SIMPLE_DEFINE(base_buf, 128);
@@ -542,9 +543,9 @@ static int cap_broadcast_source_adv_setup(struct btp_bap_broadcast_local_source 
 	struct bt_data base_ad[2];
 	struct bt_data per_ad;
 
-	err = bt_cap_initiator_broadcast_get_id(source->cap_broadcast, &source->broadcast_id);
-	if (err != 0) {
-		LOG_DBG("Unable to get broadcast ID: %d", err);
+	err = bt_rand(&broadcast_id, BT_AUDIO_BROADCAST_ID_SIZE);
+	if (err) {
+		printk("Unable to generate broadcast ID: %d\n", err);
 
 		return -EINVAL;
 	}
@@ -696,6 +697,11 @@ static uint8_t btp_cap_broadcast_source_release(const void *cmd, uint16_t cmd_le
 
 	LOG_DBG("");
 
+	/* If no source has been created yet, there is nothing to release */
+	if (source == NULL || source->cap_broadcast == NULL) {
+		return BTP_STATUS_SUCCESS;
+	}
+
 	err = bt_cap_initiator_broadcast_audio_delete(source->cap_broadcast);
 	if (err != 0) {
 		LOG_DBG("Unable to delete broadcast source: %d", err);
@@ -743,7 +749,11 @@ static uint8_t btp_cap_broadcast_adv_stop(const void *cmd, uint16_t cmd_len,
 	LOG_DBG("");
 
 	err = tester_gap_padv_stop();
-	if (err != 0) {
+	if (err == -ESRCH) {
+		/* Ext adv hasn't been created yet */
+		return BTP_STATUS_SUCCESS;
+	} else if (err != 0) {
+		LOG_DBG("Failed to stop periodic adv, err: %d", err);
 		return BTP_STATUS_FAILED;
 	}
 
@@ -784,6 +794,11 @@ static uint8_t btp_cap_broadcast_source_stop(const void *cmd, uint16_t cmd_len,
 	const struct btp_cap_broadcast_source_stop_cmd *cp = cmd;
 	struct btp_bap_broadcast_local_source *source =
 		btp_bap_broadcast_local_source_get(cp->source_id);
+
+	/* If no source has been started yet, there is nothing to stop */
+	if (source == NULL || source->cap_broadcast == NULL) {
+		return BTP_STATUS_SUCCESS;
+	}
 
 	err = bt_cap_initiator_broadcast_audio_stop(source->cap_broadcast);
 	if (err != 0) {

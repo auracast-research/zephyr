@@ -240,6 +240,24 @@ static void reset_reassembly_results(void)
 	memset(&reassembled_result, 0, sizeof(struct bt_conn_le_cs_subevent_result));
 }
 
+/** @brief Converts PCT to a pair of int16_t
+ *
+ */
+struct bt_le_cs_iq_sample bt_le_cs_parse_pct(const uint8_t pct[3])
+{
+	uint32_t pct_u32 = sys_get_le24(pct);
+
+	/* Extract I and Q. */
+	uint16_t i_u16 = pct_u32 & BT_HCI_LE_CS_PCT_I_MASK;
+	uint16_t q_u16 = (pct_u32 & BT_HCI_LE_CS_PCT_Q_MASK) >> 12;
+
+	/* Convert from 12-bit 2's complement to int16_t */
+	int16_t i = (i_u16 ^ BIT(11)) - BIT(11);
+	int16_t q = (q_u16 ^ BIT(11)) - BIT(11);
+
+	return (struct bt_le_cs_iq_sample){.i = i, .q = q};
+}
+
 void bt_le_cs_set_valid_chmap_bits(uint8_t channel_map[10])
 {
 	memset(channel_map, 0xFF, 10);
@@ -286,7 +304,7 @@ void bt_hci_le_cs_read_remote_supported_capabilities_complete(struct net_buf *bu
 
 	evt = net_buf_pull_mem(buf, sizeof(*evt));
 	if (evt->status) {
-		LOG_INF("Read Remote Supported Capabilities failed (status 0x%02X)", evt->status);
+		LOG_WRN("Read Remote Supported Capabilities failed (status 0x%02X)", evt->status);
 		return;
 	}
 
@@ -446,7 +464,7 @@ void bt_hci_le_cs_read_remote_fae_table_complete(struct net_buf *buf)
 
 	evt = net_buf_pull_mem(buf, sizeof(*evt));
 	if (evt->status) {
-		LOG_INF("Read Remote FAE Table failed with status 0x%02X", evt->status);
+		LOG_WRN("Read Remote FAE Table failed with status 0x%02X", evt->status);
 		return;
 	}
 
@@ -786,7 +804,7 @@ void bt_hci_le_cs_config_complete_event(struct net_buf *buf)
 
 	evt = net_buf_pull_mem(buf, sizeof(*evt));
 	if (evt->status) {
-		LOG_INF("CS Config failed (status 0x%02X)", evt->status);
+		LOG_WRN("CS Config failed (status 0x%02X)", evt->status);
 		return;
 	}
 
@@ -1153,7 +1171,7 @@ int bt_le_cs_write_cached_remote_supported_capabilities(
 				    NULL);
 }
 
-int bt_le_cs_write_cached_remote_fae_table(struct bt_conn *conn, uint8_t remote_fae_table[72])
+int bt_le_cs_write_cached_remote_fae_table(struct bt_conn *conn, int8_t remote_fae_table[72])
 {
 	struct bt_hci_cp_le_write_cached_remote_fae_table *cp;
 	struct net_buf *buf;
@@ -1184,7 +1202,7 @@ void bt_hci_le_cs_security_enable_complete(struct net_buf *buf)
 
 	evt = net_buf_pull_mem(buf, sizeof(*evt));
 	if (evt->status) {
-		LOG_INF("Security Enable failed with status 0x%02X", evt->status);
+		LOG_WRN("Security Enable failed with status 0x%02X", evt->status);
 		return;
 	}
 
@@ -1213,7 +1231,7 @@ void bt_hci_le_cs_procedure_enable_complete(struct net_buf *buf)
 
 	evt = net_buf_pull_mem(buf, sizeof(*evt));
 	if (evt->status) {
-		LOG_INF("Procedure Enable failed with status 0x%02X", evt->status);
+		LOG_WRN("Procedure Enable failed with status 0x%02X", evt->status);
 		return;
 	}
 
@@ -1273,7 +1291,7 @@ void bt_hci_le_cs_test_end_complete(struct net_buf *buf)
 
 	evt = net_buf_pull_mem(buf, sizeof(*evt));
 	if (evt->status) {
-		LOG_INF("CS Test End failed with status 0x%02X", evt->status);
+		LOG_WRN("CS Test End failed with status 0x%02X", evt->status);
 		return;
 	}
 
@@ -1312,6 +1330,11 @@ void bt_le_cs_step_data_parse(struct net_buf_simple *step_data_buf,
 		}
 
 		step.data = step_data_buf->data;
+
+		if (step.data_len > step_data_buf->len) {
+			LOG_WRN("Step data appears malformed.");
+			return;
+		}
 
 		if (!func(&step, user_data)) {
 			return;

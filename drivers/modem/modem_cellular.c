@@ -460,10 +460,15 @@ static void modem_cellular_chat_on_cxreg(struct modem_chat *chat, char **argv, u
 	struct modem_cellular_data *data = (struct modem_cellular_data *)user_data;
 	enum cellular_registration_status registration_status = 0;
 
-	if (argc == 2) {
-		registration_status = atoi(argv[1]);
-	} else if (argc == 3 || argc == 6) {
+	/* This receives both +C*REG? read command answers and unsolicited notifications.
+	 * Their syntax differs in that the former has one more parameter, <n>, which is first.
+	 */
+	if (argc >= 3 && argv[2][0] != '"') {
+		/* +CEREG: <n>,<stat>[,<tac>[...]] */
 		registration_status = atoi(argv[2]);
+	} else if (argc >= 2) {
+		/* +CEREG: <stat>[,<tac>[...]] */
+		registration_status = atoi(argv[1]);
 	} else {
 		return;
 	}
@@ -472,7 +477,7 @@ static void modem_cellular_chat_on_cxreg(struct modem_chat *chat, char **argv, u
 		data->registration_status_gsm = registration_status;
 	} else if (strcmp(argv[0], "+CGREG: ") == 0) {
 		data->registration_status_gprs = registration_status;
-	} else {
+	} else { /* CEREG */
 		data->registration_status_lte = registration_status;
 	}
 
@@ -1459,6 +1464,7 @@ static void modem_cellular_event_handler(struct modem_cellular_data *data,
 
 	case MODEM_CELLULAR_STATE_RUN_SHUTDOWN_SCRIPT:
 		modem_cellular_run_shutdown_script_event_handler(data, evt);
+		break;
 
 	case MODEM_CELLULAR_STATE_POWER_OFF_PULSE:
 		modem_cellular_power_off_pulse_event_handler(data, evt);
@@ -1663,7 +1669,7 @@ static int modem_cellular_get_registration_status(const struct device *dev,
 	return ret;
 }
 
-const static struct cellular_driver_api modem_cellular_api = {
+static DEVICE_API(cellular, modem_cellular_api) = {
 	.get_signal = modem_cellular_get_signal,
 	.get_modem_info = modem_cellular_get_modem_info,
 	.get_registration_status = modem_cellular_get_registration_status,

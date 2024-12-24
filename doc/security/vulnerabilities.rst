@@ -1788,4 +1788,39 @@ This has been fixed in main for v3.7.0
 :cve:`2024-8798`
 ----------------
 
-Under embargo until 2024-11-22
+Bluetooth: classic: avdtp: missing buffer length check
+
+- `Zephyr project bug tracker GHSA-r7pm-f93f-f7fp
+  <https://github.com/zephyrproject-rtos/zephyr/security/advisories/GHSA-r7pm-f93f-f7fp>`_
+
+This has been fixed in main for v4.0.0
+
+- `PR 77969 fix for main
+  <https://github.com/zephyrproject-rtos/zephyr/pull/77969>`_
+
+- `PR 78409 fix for 3.7
+  <https://github.com/zephyrproject-rtos/zephyr/pull/78409>`_
+
+:cve:`2024-10395`
+-----------------
+
+Under embargo until 2025-01-23
+
+:cve:`2024-11263`
+-----------------
+
+arch: riscv: userspace: potential security risk when CONFIG_RISCV_GP=y
+
+A rogue thread can corrupt the gp reg and cause the entire system to hard fault at best, at worst,
+it can potentially trick the system to access another set of random global symbols.
+
+- `Zephyr project bug tracker GHSA-jjf3-7x72-pqm9
+  <https://github.com/zephyrproject-rtos/zephyr/security/advisories/GHSA-jjf3-7x72-pqm9>`_
+
+This has been fixed in main for v4.0.0
+
+- `PR 81155 fix for main
+  <https://github.com/zephyrproject-rtos/zephyr/pull/81155>`_
+
+- `PR 81370 fix for 3.7
+  <https://github.com/zephyrproject-rtos/zephyr/pull/81370>`_

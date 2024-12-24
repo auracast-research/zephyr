@@ -20,7 +20,6 @@ tests:
       - frdm_ke17z512
       - rddrone_fmuk66
       - twr_ke18f
-      - twr_kv58f220m
       - frdm_mcxn947/mcxn947/cpu0
       - lpcxpresso55s06
       - lpcxpresso55s16
@@ -32,8 +31,8 @@ tests:
       - mimxrt1020_evk
       - mimxrt1024_evk
       - mimxrt1040_evk
-      - mimxrt1050_evk
-      - mimxrt1060_evk
+      - mimxrt1050_evk/mimxrt1052/hyperflash
+      - mimxrt1060_evk/mimxrt1062/qspi
       - mimxrt1062_fmurt6
       - mimxrt1064_evk
       - mimxrt1160_evk/mimxrt1166/cm7

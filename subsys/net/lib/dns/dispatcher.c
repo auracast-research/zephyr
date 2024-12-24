@@ -184,10 +184,8 @@ unlock:
 	return ret;
 }
 
-void dns_dispatcher_svc_handler(struct k_work *work)
+void dns_dispatcher_svc_handler(struct net_socket_service_event *pev)
 {
-	struct net_socket_service_event *pev =
-		CONTAINER_OF(work, struct net_socket_service_event, work);
 	int ret;
 
 	ret = recv_data(pev);
@@ -335,6 +333,11 @@ int dns_dispatcher_unregister(struct dns_socket_dispatcher *ctx)
 	k_mutex_lock(&lock, K_FOREVER);
 
 	(void)sys_slist_find_and_remove(&sockets, &ctx->node);
+
+	(void)net_socket_service_unregister(ctx->svc);
+
+	/* Mark the context as unregistered */
+	ctx->sock = -1;
 
 	for (int i = 0; i < ctx->fds_len; i++) {
 		CHECKIF((int)ctx->fds[i].fd >= (int)ARRAY_SIZE(dispatch_table)) {

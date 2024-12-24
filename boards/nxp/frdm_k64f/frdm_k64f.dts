@@ -163,6 +163,7 @@ arduino_spi: &spi0 {
 		status = "okay";
 		sdmmc {
 			compatible = "zephyr,sdmmc-disk";
+			disk-name = "SD";
 			status = "okay";
 		};
 		spi-max-frequency = <24000000>;
@@ -171,7 +172,7 @@ arduino_spi: &spi0 {
 
 &ftm0 {
 	status = "okay";
-	compatible = "nxp,kinetis-ftm-pwm";
+	compatible = "nxp,ftm-pwm";
 	#pwm-cells = <3>;
 	pinctrl-0 = <&ftm0_default>;
 	pinctrl-names = "default";
@@ -180,7 +181,7 @@ arduino_spi: &spi0 {
 
 &ftm3 {
 	status = "okay";
-	compatible = "nxp,kinetis-ftm-pwm";
+	compatible = "nxp,ftm-pwm";
 	#pwm-cells = <3>;
 	pinctrl-0 = <&ftm3_default>;
 	pinctrl-names = "default";

@@ -56,6 +56,7 @@ def mocked_instance(tmp_path):
 def mocked_env():
     env = mock.Mock()
     options = mock.Mock()
+    options.verbose = 2
     env.options = options
     return env
 
@@ -194,9 +195,9 @@ def test_executioncounter(capfd):
     ec.iteration = 2
     ec.done = 9
     ec.passed = 6
-    ec.skipped_configs = 3
-    ec.skipped_runtime = 1
-    ec.skipped_filter = 2
+    ec.filtered_configs = 3
+    ec.filtered_runtime = 1
+    ec.filtered_static = 2
     ec.failed = 1
 
     ec.summary()
@@ -206,20 +207,26 @@ def test_executioncounter(capfd):
     sys.stderr.write(err)
 
     assert (
-        f'--------------------------------\n'
-        f'Total test suites: 12\n'
-        f'Total test cases: 25\n'
-        f'Executed test cases: 19\n'
-        f'Skipped test cases: 6\n'
-        f'Completed test suites: 9\n'
-        f'Passing test suites: 6\n'
-        f'Built only test suites: 0\n'
-        f'Failing test suites: 1\n'
-        f'Skipped test suites: 3\n'
-        f'Skipped test suites (runtime): 1\n'
-        f'Skipped test suites (filter): 2\n'
-        f'Errors: 2\n'
-        f'--------------------------------'
+"├── Total test suites: 12\n"
+"├── Processed test suites: 9\n"
+"│   ├── Filtered test suites: 3\n"
+"│   │   ├── Filtered test suites (static): 2\n"
+"│   │   └── Filtered test suites (at runtime): 1\n"
+"│   └── Selected test suites: 6\n"
+"│       ├── Skipped test suites: 0\n"
+"│       ├── Passed test suites: 6\n"
+"│       ├── Built only test suites: 0\n"
+"│       ├── Failed test suites: 1\n"
+"│       └── Errors in test suites: 2\n"
+"└── Total test cases: 25\n"
+"    ├── Filtered test cases: 0\n"
+"    └── Selected test cases: 25\n"
+"        ├── Passed test cases: 0\n"
+"        ├── Skipped test cases: 6\n"
+"        ├── Built only test cases: 0\n"
+"        ├── Blocked test cases: 0\n"
+"        ├── Failed test cases: 0\n"
+"        └── Errors in test cases: 0\n"
     ) in out
 
     assert ec.cases == 25
@@ -228,9 +235,9 @@ def test_executioncounter(capfd):
     assert ec.iteration == 2
     assert ec.done == 9
     assert ec.passed == 6
-    assert ec.skipped_configs == 3
-    assert ec.skipped_runtime == 1
-    assert ec.skipped_filter == 2
+    assert ec.filtered_configs == 3
+    assert ec.filtered_runtime == 1
+    assert ec.filtered_static == 2
     assert ec.failed == 1
 
 
@@ -383,7 +390,7 @@ TESTDATA_2_2 = [
     (False, [],
      1, True, 'ERROR: region `FLASH\' overflowed by 123 MB',
      True, False, True,
-     TwisterStatus.ERROR, 'Cmake build failure',
+     TwisterStatus.ERROR, 'CMake build failure',
      [os.path.join('dummy', 'cmake'),
       '-B' + os.path.join('build', 'dir'), '-DTC_RUNID=1', '-DTC_NAME=testcase',
       '-DSB_CONFIG_COMPILER_WARNINGS_AS_ERRORS=n',
@@ -681,7 +688,7 @@ def test_filterbuilder_parse_generated(
         cache = [cache_elem]
         return cache
 
-    def mock_open(filepath, type, *args, **kwargs):
+    def mock_open(filepath, *args, **kwargs):
         if filepath == expected_defconfig_path:
             rd = 'I am not a proper line\n' \
                  'CONFIG_FOO="no"'
@@ -904,7 +911,7 @@ TESTDATA_6 = [
         TwisterStatus.FILTER,
         'runtime filter',
         1,
-        (TwisterStatus.SKIP,)
+        (TwisterStatus.FILTER,)
     ),
     (
         {'op': 'filter'},
@@ -967,7 +974,7 @@ TESTDATA_6 = [
         mock.ANY,
         [],
         {'op': 'report', 'test': mock.ANY},
-        TwisterStatus.PASS,
+        TwisterStatus.NOTRUN,
         mock.ANY,
         0,
         None
@@ -1014,7 +1021,7 @@ TESTDATA_6 = [
         TwisterStatus.FILTER,
         'runtime filter',
         1,
-        (TwisterStatus.SKIP,)
+        (TwisterStatus.FILTER,) # this is a tuple
     ),
     (
         {'op': 'cmake'},
@@ -1080,7 +1087,7 @@ TESTDATA_6 = [
         {'op': 'gather_metrics', 'test': mock.ANY},
         mock.ANY,
         mock.ANY,
-        1,
+        0,
         (TwisterStatus.SKIP, mock.ANY)
     ),
     (
@@ -1421,7 +1428,7 @@ TESTDATA_6 = [
     (
         {'op': 'cleanup', 'mode': 'all'},
         mock.ANY,
-        'Cmake build failure',
+        'CMake build failure',
         mock.ANY,
         mock.ANY,
         mock.ANY,
@@ -1536,7 +1543,7 @@ def test_projectbuilder_process(
         __exit__=mock.Mock(return_value=None)
     )
     results_mock = mock.Mock()
-    results_mock.skipped_runtime = 0
+    results_mock.filtered_runtime = 0
 
     pb.process(pipeline_mock, done_mock, message, lock_mock, results_mock)
 
@@ -1547,7 +1554,7 @@ def test_projectbuilder_process(
 
     assert pb.instance.status == expected_status
     assert pb.instance.reason == expected_reason
-    assert results_mock.skipped_runtime == expected_skipped
+    assert results_mock.filtered_runtime_increment.call_args_list == [mock.call()] * expected_skipped
 
     if expected_missing:
         pb.instance.add_missing_case_status.assert_called_with(*expected_missing)
@@ -1555,26 +1562,83 @@ def test_projectbuilder_process(
 
 TESTDATA_7 = [
     (
+        True,
         [
-            'z_ztest_unit_test__dummy_suite_name__dummy_test_name',
-            'z_ztest_unit_test__dummy_suite_name__test_dummy_name',
+            'z_ztest_unit_test__dummy_suite1_name__dummy_test_name1',
+            'z_ztest_unit_test__dummy_suite2_name__test_dummy_name2',
             'no match'
         ],
-        ['dummy_id.dummy_name', 'dummy_id.dummy_name']
+        [
+            'dummy.test_id.dummy_suite1_name.dummy_name1',
+            'dummy.test_id.dummy_suite2_name.dummy_name2'
+        ]
     ),
     (
+        False,
+        [
+            'z_ztest_unit_test__dummy_suite1_name__dummy_test_name1',
+            'z_ztest_unit_test__dummy_suite2_name__test_dummy_name2',
+            'no match'
+        ],
+        [
+            'dummy_suite1_name.dummy_name1',
+            'dummy_suite2_name.dummy_name2'
+        ]
+    ),
+    (
+        True,
+        [
+            'z_ztest_unit_test__dummy_suite2_name__test_dummy_name2',
+            'z_ztest_unit_test__bad_suite3_name_no_test',
+            '_ZN12_GLOBAL__N_1L54z_ztest_unit_test__dummy_suite3_name__test_dummy_name4E',
+            '_ZN12_GLOBAL__N_1L54z_ztest_unit_test__dummy_suite3_name__test_bad_name1E',
+            '_ZN12_GLOBAL__N_1L51z_ztest_unit_test_dummy_suite3_name__test_bad_name2E',
+            '_ZN12_GLOBAL__N_1L54z_ztest_unit_test__dummy_suite3_name__test_dummy_name5E',
+            '_ZN15foobarnamespaceL54z_ztest_unit_test__dummy_suite3_name__test_dummy_name6E',
+        ],
+        [
+           'dummy.test_id.dummy_suite2_name.dummy_name2',
+           'dummy.test_id.dummy_suite3_name.dummy_name4',
+           'dummy.test_id.dummy_suite3_name.bad_name1E',
+           'dummy.test_id.dummy_suite3_name.dummy_name5',
+           'dummy.test_id.dummy_suite3_name.dummy_name6',
+        ]
+    ),
+    (
+        True,
+        [
+            'z_ztest_unit_test__dummy_suite2_name__test_dummy_name2',
+            'z_ztest_unit_test__bad_suite3_name_no_test',
+            '_ZN12_GLOBAL__N_1L54z_ztest_unit_test__dummy_suite3_name__test_dummy_name4E',
+            '_ZN12_GLOBAL__N_1L54z_ztest_unit_test__dummy_suite3_name__test_bad_name1E',
+            '_ZN12_GLOBAL__N_1L51z_ztest_unit_test_dummy_suite3_name__test_bad_name2E',
+            '_ZN12_GLOBAL__N_1L54z_ztest_unit_test__dummy_suite3_name__test_dummy_name5E',
+            '_ZN15foobarnamespaceL54z_ztest_unit_test__dummy_suite3_name__test_dummy_name6E',
+        ],
+        [
+           'dummy_suite2_name.dummy_name2',
+           'dummy_suite3_name.dummy_name4',
+           'dummy_suite3_name.bad_name1E',
+           'dummy_suite3_name.dummy_name5',
+           'dummy_suite3_name.dummy_name6',
+        ]
+    ),
+    (
+        True,
         ['no match'],
         []
     ),
 ]
 
 @pytest.mark.parametrize(
-    'symbols_names, added_tcs',
+    'detailed_id, symbols_names, added_tcs',
     TESTDATA_7,
-    ids=['two hits, one miss', 'nothing']
+    ids=['two hits, one miss', 'two hits short id', 'demangle', 'demangle short id', 'nothing']
 )
 def test_projectbuilder_determine_testcases(
     mocked_jobserver,
+    mocked_env,
+    detailed_id,
     symbols_names,
     added_tcs
 ):
@@ -1592,10 +1656,12 @@ def test_projectbuilder_determine_testcases(
 
     instance_mock = mock.Mock()
     instance_mock.testcases = []
-    instance_mock.testsuite.id = 'dummy_id'
-    env_mock = mock.Mock()
+    instance_mock.testsuite.id = 'dummy.test_id'
+    instance_mock.testsuite.ztest_suite_names = []
+    instance_mock.testsuite.detailed_test_id = detailed_id
+    instance_mock.compose_case_name = mock.Mock(side_effect=iter(added_tcs))
 
-    pb = ProjectBuilder(instance_mock, env_mock, mocked_jobserver)
+    pb = ProjectBuilder(instance_mock, mocked_env, mocked_jobserver)
 
     with mock.patch('twisterlib.runner.ELFFile', elf_mock), \
          mock.patch('builtins.open', mock.mock_open()):
@@ -1936,16 +2002,16 @@ TESTDATA_13 = [
         TwisterStatus.ERROR, True, True, False,
         ['INFO      20/25 dummy platform' \
          '            dummy.testsuite.name' \
-         '                                ERROR dummy reason (cmake)'],
+         '                               ERROR dummy reason (cmake)'],
         None
     ),
     (
         TwisterStatus.FAIL, False, False, False,
         ['ERROR     dummy platform' \
          '            dummy.testsuite.name' \
-         '                                FAILED : dummy reason'],
+         '                               FAILED: dummy reason'],
         'INFO    - Total complete:   20/  25  80%' \
-        '  built (not run):    0, skipped:    3, failed:    3, error:    1'
+        '  built (not run):    0, filtered:    3, failed:    3, error:    1'
     ),
     (
         TwisterStatus.SKIP, True, False, False,
@@ -1958,7 +2024,7 @@ TESTDATA_13 = [
         TwisterStatus.FILTER, False, False, False,
         [],
         'INFO    - Total complete:   20/  25  80%' \
-        '  built (not run):    0, skipped:    4, failed:    2, error:    1'
+        '  built (not run):    0, filtered:    4, failed:    2, error:    1'
     ),
     (
         TwisterStatus.PASS, True, False, True,
@@ -1979,7 +2045,7 @@ TESTDATA_13 = [
         'unknown status', False, False, False,
         ['Unknown status = unknown status'],
         'INFO    - Total complete:   20/  25  80%'
-        '  built (not run):    0, skipped:    3, failed:    2, error:    1\r'
+        '  built (not run):    0, filtered:    3, failed:    2, error:    1\r'
     )
 ]
 
@@ -2026,21 +2092,49 @@ def test_projectbuilder_report_out(
     pb.options.seed = 123
     pb.log_info_file = mock.Mock()
 
-    results_mock = mock.Mock()
+    results_mock = mock.Mock(
+        total = 25,
+        done = 19,
+        passed = 17,
+        notrun = 0,
+        failed = 2,
+        filtered_configs = 3,
+        filtered_runtime = 0,
+        filtered_static = 0,
+        error = 1,
+        cases = 0,
+        filtered_cases = 0,
+        skipped_cases = 4,
+        failed_cases = 0,
+        error_cases = 0,
+        blocked_cases = 0,
+        passed_cases = 0,
+        none_cases = 0,
+        started_cases = 0
+    )
     results_mock.iteration = 1
-    results_mock.total = 25
-    results_mock.done = 19
-    results_mock.passed = 17
-    results_mock.notrun = 0
-    results_mock.skipped_configs = 3
-    results_mock.skipped_cases = 4
-    results_mock.failed = 2
-    results_mock.error = 1
-    results_mock.cases = 0
+    def results_done_increment(value=1, decrement=False):
+        results_mock.done += value * (-1 if decrement else 1)
+    results_mock.done_increment = results_done_increment
+    def filtered_configs_increment(value=1, decrement=False):
+        results_mock.filtered_configs += value * (-1 if decrement else 1)
+    results_mock.filtered_configs_increment = filtered_configs_increment
+    def filtered_static_increment(value=1, decrement=False):
+        results_mock.filtered_static += value * (-1 if decrement else 1)
+    results_mock.filtered_static_increment = filtered_static_increment
+    def filtered_runtime_increment(value=1, decrement=False):
+        results_mock.filtered_runtime += value * (-1 if decrement else 1)
+    results_mock.filtered_runtime_increment = filtered_runtime_increment
+    def failed_increment(value=1, decrement=False):
+        results_mock.failed += value * (-1 if decrement else 1)
+    results_mock.failed_increment = failed_increment
+    def notrun_increment(value=1, decrement=False):
+        results_mock.notrun += value * (-1 if decrement else 1)
+    results_mock.notrun_increment = notrun_increment
 
     pb.report_out(results_mock)
 
-    assert results_mock.cases == 25
+    assert results_mock.cases_increment.call_args_list == [mock.call(25)]
 
     trim_actual_log = re.sub(
         r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])',
@@ -2051,6 +2145,7 @@ def test_projectbuilder_report_out(
 
     assert all([log in trim_actual_log for log in expected_logs])
 
+    print(trim_actual_log)
     if expected_out:
         out, err = capfd.readouterr()
         sys.stdout.write(out)
@@ -2102,13 +2197,11 @@ def test_projectbuilder_cmake():
     instance_mock = mock.Mock()
     instance_mock.handler = 'dummy handler'
     instance_mock.build_dir = os.path.join('build', 'dir')
-    instance_mock.platform.name = 'frdm_k64f'
     env_mock = mock.Mock()
 
     pb = ProjectBuilder(instance_mock, env_mock, mocked_jobserver)
     pb.build_dir = 'build_dir'
-    pb.testsuite.platform = instance_mock.platform
-    pb.testsuite.extra_args = ['some', 'platform:frdm_k64f:args']
+    pb.testsuite.extra_args = ['some', 'args']
     pb.testsuite.extra_conf_files = ['some', 'files1']
     pb.testsuite.extra_overlay_confs = ['some', 'files2']
     pb.testsuite.extra_dtc_overlay_files = ['some', 'files3']
@@ -2121,7 +2214,7 @@ def test_projectbuilder_cmake():
 
     assert res == cmake_res_mock
     pb.cmake_assemble_args.assert_called_once_with(
-        ['some', 'args'],
+        pb.testsuite.extra_args,
         pb.instance.handler,
         pb.testsuite.extra_conf_files,
         pb.testsuite.extra_overlay_confs,
@@ -2448,6 +2541,10 @@ def test_twisterrunner_run(
     results_mock().failed = 2
     results_mock().total = 9
 
+    def iteration_increment(value=1, decrement=False):
+        results_mock().iteration += value * (-1 if decrement else 1)
+    results_mock().iteration_increment = iteration_increment
+
     with mock.patch('twisterlib.runner.ExecutionCounter', results_mock), \
          mock.patch('twisterlib.runner.BaseManager', manager_mock), \
          mock.patch('twisterlib.runner.GNUMakeJobClient.from_environ',
@@ -2518,18 +2615,45 @@ def test_twisterrunner_update_counting_before_pipeline():
 
     tr = TwisterRunner(instances, suites, env=env_mock)
     tr.results = mock.Mock(
-        skipped_filter = 0,
-        skipped_configs = 0,
-        skipped_cases = 0,
+        total = 0,
+        done = 0,
+        passed = 0,
+        failed = 0,
+        filtered_configs = 0,
+        filtered_runtime = 0,
+        filtered_static = 0,
+        error = 0,
         cases = 0,
-        error = 0
+        filtered_cases = 0,
+        skipped_cases = 0,
+        failed_cases = 0,
+        error_cases = 0,
+        blocked_cases = 0,
+        passed_cases = 0,
+        none_cases = 0,
+        started_cases = 0
     )
+    def filtered_configs_increment(value=1, decrement=False):
+        tr.results.filtered_configs += value * (-1 if decrement else 1)
+    tr.results.filtered_configs_increment = filtered_configs_increment
+    def filtered_static_increment(value=1, decrement=False):
+        tr.results.filtered_static += value * (-1 if decrement else 1)
+    tr.results.filtered_static_increment = filtered_static_increment
+    def error_increment(value=1, decrement=False):
+        tr.results.error += value * (-1 if decrement else 1)
+    tr.results.error_increment = error_increment
+    def cases_increment(value=1, decrement=False):
+        tr.results.cases += value * (-1 if decrement else 1)
+    tr.results.cases_increment = cases_increment
+    def filtered_cases_increment(value=1, decrement=False):
+        tr.results.filtered_cases += value * (-1 if decrement else 1)
+    tr.results.filtered_cases_increment = filtered_cases_increment
 
     tr.update_counting_before_pipeline()
 
-    assert tr.results.skipped_filter == 1
-    assert tr.results.skipped_configs == 1
-    assert tr.results.skipped_cases == 4
+    assert tr.results.filtered_static == 1
+    assert tr.results.filtered_configs == 1
+    assert tr.results.filtered_cases == 4
     assert tr.results.cases == 4
     assert tr.results.error == 1
 
@@ -2547,8 +2671,8 @@ def test_twisterrunner_show_brief(caplog):
 
     tr = TwisterRunner(instances, suites, env=env_mock)
     tr.results = mock.Mock(
-        skipped_filter = 3,
-        skipped_configs = 4,
+        filtered_static = 3,
+        filtered_configs = 4,
         skipped_cases = 0,
         cases = 0,
         error = 0
@@ -2556,8 +2680,8 @@ def test_twisterrunner_show_brief(caplog):
 
     tr.show_brief()
 
-    log = '2 test scenarios (5 test instances) selected,' \
-          ' 4 configurations skipped (3 by static filter, 1 at runtime).'
+    log = '2 test scenarios (5 configurations) selected,' \
+          ' 4 configurations filtered (3 by static filter, 1 at runtime).'
 
     assert log in caplog.text
 
@@ -2608,6 +2732,7 @@ def test_twisterrunner_add_tasks_to_queue(
     tr.get_cmake_filter_stages = mock.Mock(
         side_effect=mock_get_cmake_filter_stages
     )
+    tr.results = mock.Mock(iteration=0)
 
     pipeline_mock = mock.Mock()
 

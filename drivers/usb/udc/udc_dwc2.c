@@ -54,8 +54,11 @@ enum dwc2_drv_event_type {
  */
 #define UDC_DWC2_GRXFSIZ_HS_DEFAULT	(13 + 1 + 774)
 
-/* TX FIFO0 depth in 32-bit words (used by control IN endpoint) */
-#define UDC_DWC2_FIFO0_DEPTH		16U
+/* TX FIFO0 depth in 32-bit words (used by control IN endpoint)
+ * Try 2 * bMaxPacketSize0 to allow simultaneous operation with a fallback to
+ * whatever is available when 2 * bMaxPacketSize0 is not possible.
+ */
+#define UDC_DWC2_FIFO0_DEPTH		(2 * 16U)
 
 /* Get Data FIFO access register */
 #define UDC_DWC2_EP_FIFO(base, idx)	((mem_addr_t)base + 0x1000 * (idx + 1))
@@ -99,9 +102,9 @@ struct udc_dwc2_data {
 	struct k_thread thread_data;
 	/* Main events the driver thread waits for */
 	struct k_event drv_evt;
-	/* Transfer triggers (OUT on bits 0-15, IN on bits 16-31) */
+	/* Transfer triggers (IN on bits 0-15, OUT on bits 16-31) */
 	struct k_event xfer_new;
-	/* Finished transactions (OUT on bits 0-15, IN on bits 16-31) */
+	/* Finished transactions (IN on bits 0-15, OUT on bits 16-31) */
 	struct k_event xfer_finished;
 	struct dwc2_reg_backup backup;
 	uint32_t ghwcfg1;
@@ -1184,7 +1187,7 @@ static int dwc2_set_dedicated_fifo(const struct device *dev,
 				  dwc2_get_txfaddr(dev, ep_idx - 2);
 		} else {
 			txfaddr = priv->rxfifo_depth +
-				MAX(UDC_DWC2_FIFO0_DEPTH, priv->max_txfifo_depth[0]);
+				MIN(UDC_DWC2_FIFO0_DEPTH, priv->max_txfifo_depth[0]);
 		}
 
 		/* Make sure to not set TxFIFO greater than hardware allows */
@@ -1384,11 +1387,12 @@ static void udc_dwc2_ep_disable(const struct device *dev,
 	uint8_t ep_idx = USB_EP_GET_IDX(cfg->addr);
 	mem_addr_t dxepctl_reg;
 	uint32_t dxepctl;
+	const bool is_iso = dwc2_ep_is_iso(cfg);
 
 	dxepctl_reg = dwc2_get_dxepctl_reg(dev, cfg->addr);
 	dxepctl = sys_read32(dxepctl_reg);
 
-	if (dxepctl & USB_DWC2_DEPCTL_NAKSTS) {
+	if (!is_iso && (dxepctl & USB_DWC2_DEPCTL_NAKSTS)) {
 		/* Endpoint already sends forced NAKs. STALL if necessary. */
 		if (stall) {
 			dxepctl |= USB_DWC2_DEPCTL_STALL;
@@ -1397,6 +1401,19 @@ static void udc_dwc2_ep_disable(const struct device *dev,
 
 		return;
 	}
+
+	/* FIXME: This function needs to be changed to not synchronously wait
+	 * for the events to happen because the actions here are racing against
+	 * the USB host packets. It is possible that the IN token or OUT DATA
+	 * gets sent shortly before this function disables the endpoint. If this
+	 * happens, the XferCompl would be set and driver will incorrectly think
+	 * that either:
+	 *   * never queued transfer finished, OR
+	 *   * transfer queued in incompisoin handler finished (before it really
+	 *     does and then it'll "double"-finish when it actually finishes)
+	 *
+	 * For the time being XferCompl is cleared as a workaround.
+	 */
 
 	if (USB_EP_DIR_IS_OUT(cfg->addr)) {
 		mem_addr_t dctl_reg, gintsts_reg, doepint_reg;
@@ -1436,7 +1453,7 @@ static void udc_dwc2_ep_disable(const struct device *dev,
 		}
 
 		/* Clear Endpoint Disabled interrupt */
-		sys_write32(USB_DWC2_DIEPINT_EPDISBLD, doepint_reg);
+		sys_write32(USB_DWC2_DOEPINT_EPDISBLD | USB_DWC2_DOEPINT_XFERCOMPL, doepint_reg);
 
 		dctl |= USB_DWC2_DCTL_CGOUTNAK;
 		sys_write32(dctl, dctl_reg);
@@ -1460,7 +1477,7 @@ static void udc_dwc2_ep_disable(const struct device *dev,
 		dwc2_wait_for_bit(dev, diepint_reg, USB_DWC2_DIEPINT_EPDISBLD);
 
 		/* Clear Endpoint Disabled interrupt */
-		sys_write32(USB_DWC2_DIEPINT_EPDISBLD, diepint_reg);
+		sys_write32(USB_DWC2_DIEPINT_EPDISBLD | USB_DWC2_DIEPINT_XFERCOMPL, diepint_reg);
 
 		/* TODO: Read DIEPTSIZn here? Programming Guide suggest it to
 		 * let application know how many bytes of interrupted transfer
@@ -1554,9 +1571,9 @@ static int udc_dwc2_ep_clear_halt(const struct device *dev,
 		uint32_t ep_bit;
 
 		if (USB_EP_DIR_IS_IN(cfg->addr)) {
-			ep_bit = BIT(16 + USB_EP_GET_IDX(cfg->addr));
-		} else {
 			ep_bit = BIT(USB_EP_GET_IDX(cfg->addr));
+		} else {
+			ep_bit = BIT(16 + USB_EP_GET_IDX(cfg->addr));
 		}
 
 		k_event_post(&priv->xfer_new, ep_bit);
@@ -1579,9 +1596,9 @@ static int udc_dwc2_ep_enqueue(const struct device *dev,
 		uint32_t ep_bit;
 
 		if (USB_EP_DIR_IS_IN(cfg->addr)) {
-			ep_bit = BIT(16 + USB_EP_GET_IDX(cfg->addr));
-		} else {
 			ep_bit = BIT(USB_EP_GET_IDX(cfg->addr));
+		} else {
+			ep_bit = BIT(16 + USB_EP_GET_IDX(cfg->addr));
 		}
 
 		k_event_post(&priv->xfer_new, ep_bit);
@@ -1939,7 +1956,7 @@ static int udc_dwc2_init_controller(const struct device *dev)
 		sys_write32(usb_dwc2_set_grxfsiz(priv->rxfifo_depth), grxfsiz_reg);
 
 		/* Set TxFIFO 0 depth */
-		val = MAX(UDC_DWC2_FIFO0_DEPTH, priv->max_txfifo_depth[0]);
+		val = MIN(UDC_DWC2_FIFO0_DEPTH, priv->max_txfifo_depth[0]);
 		gnptxfsiz = usb_dwc2_set_gnptxfsiz_nptxfdep(val) |
 			    usb_dwc2_set_gnptxfsiz_nptxfstaddr(priv->rxfifo_depth);
 
@@ -2346,7 +2363,7 @@ static inline void dwc2_handle_in_xfercompl(const struct device *dev,
 		return;
 	}
 
-	k_event_post(&priv->xfer_finished, BIT(16 + ep_idx));
+	k_event_post(&priv->xfer_finished, BIT(ep_idx));
 	k_event_post(&priv->drv_evt, BIT(DWC2_DRV_EVT_EP_FINISHED));
 }
 
@@ -2452,7 +2469,7 @@ static inline void dwc2_handle_out_xfercompl(const struct device *dev,
 	    net_buf_tailroom(buf)) {
 		dwc2_prep_rx(dev, buf, ep_cfg);
 	} else {
-		k_event_post(&priv->xfer_finished, BIT(ep_idx));
+		k_event_post(&priv->xfer_finished, BIT(16 + ep_idx));
 		k_event_post(&priv->drv_evt, BIT(DWC2_DRV_EVT_EP_FINISHED));
 	}
 }
@@ -2568,7 +2585,11 @@ static void dwc2_handle_incompisoin(const struct device *dev)
 
 				buf = udc_buf_get(dev, cfg->addr);
 				if (buf) {
+					/* Data is no longer relevant */
 					udc_submit_ep_event(dev, buf, 0);
+
+					/* Try to queue next packet before SOF */
+					dwc2_handle_xfer_next(dev, cfg);
 				}
 			}
 		}
@@ -2803,9 +2824,9 @@ static uint8_t pull_next_ep_from_bitmap(uint32_t *bitmap)
 	*bitmap &= ~BIT(bit);
 
 	if (bit >= 16) {
-		return USB_EP_DIR_IN | (bit - 16);
+		return USB_EP_DIR_OUT | (bit - 16);
 	} else {
-		return USB_EP_DIR_OUT | bit;
+		return USB_EP_DIR_IN | bit;
 	}
 }
 

@@ -31,7 +31,7 @@ static const uint8_t saadc_psels[NRF_SAADC_AIN7 + 1] = {
 	[NRF_SAADC_AIN6] = NRF_PIN_PORT_TO_PIN_NUMBER(6U, 1),
 	[NRF_SAADC_AIN7] = NRF_PIN_PORT_TO_PIN_NUMBER(7U, 1),
 };
-#elif defined(CONFIG_SOC_NRF54L15)
+#elif defined(CONFIG_SOC_NRF54L05) || defined(CONFIG_SOC_NRF54L10) || defined(CONFIG_SOC_NRF54L15)
 static const uint32_t saadc_psels[NRF_SAADC_DVDD + 1] = {
 	[NRF_SAADC_AIN0] = NRF_PIN_PORT_TO_PIN_NUMBER(4U, 1),
 	[NRF_SAADC_AIN1] = NRF_PIN_PORT_TO_PIN_NUMBER(5U, 1),
@@ -66,9 +66,9 @@ BUILD_ASSERT((NRF_SAADC_AIN0 == NRF_SAADC_INPUT_AIN0) &&
 	     "Definitions from nrf-adc.h do not match those from nrf_saadc.h");
 #endif
 
-#if defined(CONFIG_SOC_NRF54H20) || defined(CONFIG_SOC_NRF9280)
+#if defined(CONFIG_NRF_PLATFORM_HALTIUM)
 
-/* nRF54H20 and nRF9280 always use bounce buffers in RAM */
+/* Haltium devices always use bounce buffers in RAM */
 
 #define SAADC_MEMORY_SECTION					                     \
 	COND_CODE_1(DT_NODE_HAS_PROP(DT_NODELABEL(adc), memory_regions), \
@@ -80,7 +80,7 @@ static uint16_t adc_samples_buffer[SAADC_CH_NUM] SAADC_MEMORY_SECTION;
 
 #define ADC_BUFFER_IN_RAM
 
-#endif /* defined(CONFIG_SOC_NRF54H20) || defined(CONFIG_SOC_NRF9280) */
+#endif /* defined(CONFIG_NRF_PLATFORM_HALTIUM) */
 
 struct driver_data {
 	struct adc_context ctx;
@@ -661,15 +661,15 @@ static int init_saadc(const struct device *dev)
 	return 0;
 }
 
-static const struct adc_driver_api adc_nrfx_driver_api = {
+static DEVICE_API(adc, adc_nrfx_driver_api) = {
 	.channel_setup = adc_nrfx_channel_setup,
 	.read          = adc_nrfx_read,
 #ifdef CONFIG_ADC_ASYNC
 	.read_async    = adc_nrfx_read_async,
 #endif
-#if defined(CONFIG_SOC_NRF54L15)
+#if defined(CONFIG_SOC_NRF54L05) || defined(CONFIG_SOC_NRF54L10) ||  defined(CONFIG_SOC_NRF54L15)
 	.ref_internal  = 900,
-#elif defined(CONFIG_SOC_NRF54H20) || defined(CONFIG_SOC_NRF9280)
+#elif defined(CONFIG_NRF_PLATFORM_HALTIUM)
 	.ref_internal  = 1024,
 #else
 	.ref_internal  = 600,

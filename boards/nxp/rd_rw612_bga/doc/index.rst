@@ -1,7 +1,4 @@
-.. _rd_rw612_bga:
-
-NXP RD-RW612-BGA
-################
+.. zephyr:board:: rd_rw612_bga
 
 Overview
 ********
@@ -59,6 +56,8 @@ Supported Features
 +-----------+------------+-----------------------------------+
 | CTIMER    | on-chip    | counter                           |
 +-----------+------------+-----------------------------------+
+| SCTIMER   | on-chip    | pwm                               |
++-----------+------------+-----------------------------------+
 | MRT       | on-chip    | counter                           |
 +-----------+------------+-----------------------------------+
 | OS_TIMER  | on-chip    | os timer                          |
@@ -73,6 +72,8 @@ Supported Features
 | DAC       | on-chip    | dac                               |
 +-----------+------------+-----------------------------------+
 | ENET      | on-chip    | ethernet                          |
++-----------+------------+-----------------------------------+
+| Wi-Fi     | on-chip    | Wi-Fi                             |
 +-----------+------------+-----------------------------------+
 
 The default configuration can be found in the defconfig file:
@@ -137,7 +138,7 @@ display sample can be built for the module like so:
 Fetch Binary Blobs
 ******************
 
-To support Bluetooth, rd_rw612_bga requires fetching binary blobs, which can be
+To support Bluetooth or Wi-Fi, rd_rw612_bga requires fetching binary blobs, which can be
 achieved by running the following command:
 
 .. code-block:: console
@@ -215,6 +216,16 @@ rd_rw612_bga platform supports the monolithic feature. The required binary blob
 ``<zephyr workspace>/modules/hal/nxp/zephyr/blobs/rw61x_sb_ble_a2.bin`` will be linked
 with the application image directly, forming one single monolithic image.
 
+Wi-Fi
+*****
+
+Wi-Fi functionality requires to fetch binary blobs, so make sure to follow
+the ``Fetch Binary Blobs`` section first.
+
+rd_rw612_bga platform supports the monolithic feature. The required binary blob
+``<zephyr workspace>/modules/hal/nxp/zephyr/blobs/rw61x_sb_wifi_a2.bin`` will be linked
+with the application image directly, forming one single monolithic image.
+
 Board variants
 **************
 
@@ -248,6 +259,8 @@ Then, build for the board target ``rd_rw612_bga//ethernet``.
 
 Resources
 *********
+
+.. target-notes::
 
 .. _RW612 Website:
    https://www.nxp.com/products/wireless-connectivity/wi-fi-plus-bluetooth-plus-802-15-4/wireless-mcu-with-integrated-tri-radiobr1x1-wi-fi-6-plus-bluetooth-low-energy-5-3-802-15-4:RW612

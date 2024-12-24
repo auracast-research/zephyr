@@ -1,7 +1,4 @@
-.. _frdm_mcxw71:
-
-NXP FRDM-MCXW71
-################
+.. zephyr:board:: frdm_mcxw71
 
 Overview
 ********
@@ -18,10 +15,6 @@ multiprotocol radio subsystem supporting Matter, Thread, Zigbee and Bluetooth
 LE. The independent radio subsystem, with a dedicated core and memory, offloads
 the main CPU, preserving it for the primary application and allowing firmware
 updates to support future wireless standards.
-
-.. image:: frdm_mcxw71.webp
-   :align: center
-   :alt: FRDM-MCXW71
 
 Hardware
 ********
@@ -57,6 +50,8 @@ The ``frdm_mcxw71`` board target in Zephyr currently supports the following feat
 +-----------+------------+-------------------------------------+
 | LPI2C     | on-chip    | i2c                                 |
 +-----------+------------+-------------------------------------+
+| LPSPI     | on-chip    | spi                                 |
++-----------+------------+-------------------------------------+
 | FMU       | on-chip    | flash                               |
 +-----------+------------+-------------------------------------+
 | TPM       | on-chip    | pwm                                 |
@@ -66,6 +61,12 @@ The ``frdm_mcxw71`` board target in Zephyr currently supports the following feat
 | LPTMR     | on-chip    | counter                             |
 +-----------+------------+-------------------------------------+
 | BLE       | on-chip    | Bluetooth                           |
++-----------+------------+-------------------------------------+
+| FLEXCAN   | on-chip    | can                                 |
++-----------+------------+-------------------------------------+
+| VREF      | on-chip    | regulator                           |
++-----------+------------+-------------------------------------+
+| LPADC     | on-chip    | adc                                 |
 +-----------+------------+-------------------------------------+
 
 Fetch Binary Blobs
@@ -89,6 +90,16 @@ Configuring a Debug Probe
 
 A debug probe is used for both flashing and debugging the board. This board is
 configured by default to use the MCU-Link CMSIS-DAP Onboard Debug Probe.
+
+Using LinkServer
+----------------
+
+Linkserver is the default runner for this board, and supports the factory
+default MCU-Link firmware. Follow the instructions in
+:ref:`mcu-link-cmsis-onboard-debug-probe` to reprogram the default MCU-Link
+firmware. This only needs to be done if the default onboard debug circuit
+firmware was changed. To put the board in ``DFU mode`` to program the firmware,
+short jumper J5.
 
 Using J-Link
 ------------
@@ -191,8 +202,16 @@ For more details:
 .. _blhost Website:
    https://www.nxp.com/search?keyword=blhost&start=0
 
+Troubleshooting
+===============
+
+.. include:: ../../common/segger-ecc-systemview.rst
+   :start-after: segger-ecc-systemview
+
 References
 **********
+
+.. target-notes::
 
 .. _MCXW71 SoC Website:
    https://www.nxp.com/products/processors-and-microcontrollers/arm-microcontrollers/general-purpose-mcus/mcx-arm-cortex-m/mcx-w-series-microcontrollers/mcx-w71x-secure-and-ultra-low-power-mcus-for-matter-thread-zigbee-and-bluetooth-le:MCX-W71X

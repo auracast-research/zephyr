@@ -5,8 +5,8 @@ import logging
 from collections import namedtuple
 from pathlib import Path
 
-import list_boards, list_hardware
-import pykwalify
+import list_boards
+import list_hardware
 import yaml
 import zephyr_module
 from gen_devicetree_rest import VndLookup
@@ -35,8 +35,8 @@ def guess_image(board_or_shield):
     img_file = guess_file_from_patterns(
         board_or_shield.dir, patterns, board_or_shield.name, img_exts
     )
-    return (Path("../_images") / img_file.name).as_posix() if img_file else ""
 
+    return (img_file.relative_to(ZEPHYR_BASE)).as_posix() if img_file else None
 
 def guess_doc_page(board_or_shield):
     patterns = [
@@ -52,8 +52,6 @@ def guess_doc_page(board_or_shield):
 
 
 def get_catalog():
-    pykwalify.init_logging(1)
-
     vnd_lookup = VndLookup(ZEPHYR_BASE / "dts/bindings/vendor-prefixes.txt", [])
 
     module_settings = {
@@ -73,7 +71,7 @@ def get_catalog():
         arch_roots=module_settings["arch_root"],
         board_roots=module_settings["board_root"],
         soc_roots=module_settings["soc_root"],
-        board_dir=ZEPHYR_BASE / "boards",
+        board_dir=[],
         board=None,
     )
 
@@ -81,11 +79,15 @@ def get_catalog():
     systems = list_hardware.find_v2_systems(args_find_boards)
     board_catalog = {}
 
-    for board in boards:
+    for board in boards.values():
         # We could use board.vendor but it is often incorrect. Instead, deduce vendor from
-        # containing folder
+        # containing folder. There are a few exceptions, like the "native" and "others" folders
+        # which we know are not actual vendors so treat them as such.
         for folder in board.dir.parents:
-            if vnd_lookup.vnd2vendor.get(folder.name):
+            if folder.name in ["native", "others"]:
+                vendor = "others"
+                break
+            elif vnd_lookup.vnd2vendor.get(folder.name):
                 vendor = folder.name
                 break
 
@@ -95,7 +97,7 @@ def get_catalog():
         pattern = f"{board.name}*.yaml"
         for twister_file in board.dir.glob(pattern):
             try:
-                with open(twister_file, "r") as f:
+                with open(twister_file) as f:
                     board_data = yaml.safe_load(f)
                     archs.add(board_data.get("arch"))
             except Exception as e:
@@ -106,6 +108,7 @@ def get_catalog():
         doc_page = guess_doc_page(board)
 
         board_catalog[board.name] = {
+            "name": board.name,
             "full_name": full_name,
             "doc_page": doc_page.relative_to(ZEPHYR_BASE).as_posix() if doc_page else None,
             "vendor": vendor,
@@ -120,4 +123,8 @@ def get_catalog():
         series = soc.series or "<no series>"
         socs_hierarchy.setdefault(family, {}).setdefault(series, []).append(soc.name)
 
-    return {"boards": board_catalog, "vendors": vnd_lookup.vnd2vendor, "socs": socs_hierarchy}
+    return {
+        "boards": board_catalog,
+        "vendors": {**vnd_lookup.vnd2vendor, "others": "Other/Unknown"},
+        "socs": socs_hierarchy,
+    }

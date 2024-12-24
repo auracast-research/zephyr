@@ -49,7 +49,7 @@ LOG_MODULE_REGISTER(net_mdns_responder, CONFIG_MDNS_RESPONDER_LOG_LEVEL);
 #pragma GCC diagnostic ignored "-Wstringop-overread"
 #endif
 
-extern void dns_dispatcher_svc_handler(struct k_work *work);
+extern void dns_dispatcher_svc_handler(struct net_socket_service_event *pev);
 
 #define MDNS_LISTEN_PORT 5353
 
@@ -873,7 +873,7 @@ static int init_listener(void)
 				ifindex, ret);
 		} else {
 			memset(&if_req, 0, sizeof(if_req));
-			strncpy(if_req.ifr_name, name, sizeof(if_req.ifr_name));
+			strncpy(if_req.ifr_name, name, sizeof(if_req.ifr_name) - 1);
 
 			ret = zsock_setsockopt(v4, SOL_SOCKET, SO_BINDTODEVICE,
 					       &if_req, sizeof(if_req));

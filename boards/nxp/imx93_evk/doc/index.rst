@@ -1,7 +1,4 @@
-.. _imx93_evk:
-
-NXP i.MX93 EVK
-##############
+.. zephyr:board:: imx93_evk
 
 Overview
 ********
@@ -140,6 +137,28 @@ over dts config. For instance, if ``CONFIG_CAN`` is enabled, MUX A is selected
 even if ``mux="B";`` is configured in dts, and an warning would be reported in
 the log.
 
+User Button GPIO Option
+--------------------------
+
+The user buttons RFU_BTN1 and RFU_BTN2 is connected to i.MX 93 GPIO by default,
+but can be changed to connect to onboard GPIO expander PCAL6524 with on-board DIP
+switches. To do this, switch SW1006 to 0000, then switch SW1005 to 0101. An devicetree
+overlay is included to support this.
+
+Run following command to test user buttons on PCAL6524:
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/basic/button
+   :host-os: unix
+   :board: imx93_evk/mimx9352/a55
+   :goals: build
+   :gen-args: -DEXTRA_DTC_OVERLAY_FILE=imx93_evk_mimx9352_exp_btn.overlay
+
+Run the app, press RFU_BTN1 and the red LED turns on accordingly.
+
+Note: The overlay only supports ``mimx9352/a55``, but can be extended to support
+``mimx9352/m33`` if I2C and PCAL6524 is enabled.
+
 Programming and Debugging (A55)
 *******************************
 
@@ -221,9 +240,25 @@ prompt.
 
 Use U-Boot to load and kick zephyr.bin to Cortex-M33 Core:
 
+Boot with code from TCM
+=======================
+
 .. code-block:: console
 
     load mmc 1:1 0x80000000 zephyr.bin;cp.b 0x80000000 0x201e0000 0x30000;bootaux 0x1ffe0000 0
+
+Boot with code from DDR
+=======================
+
+.. code-block:: console
+
+    load mmc 1:1 0x84000000 zephyr.bin;dcache flush;bootaux 0x84000000 0
+
+Note: Cortex M33 need execute permission to run code from DDR memory. In order
+to enable this, `imx-atf`_ can to be modified in "plat/imx/imx93/trdc_config.h".
+
+.. _imx-atf:
+    https://github.com/nxp-imx/imx-atf
 
 Use this configuration to run basic Zephyr applications and kernel tests,
 for example, with the :zephyr:code-sample:`synchronization` sample:

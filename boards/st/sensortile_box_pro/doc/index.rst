@@ -1,7 +1,4 @@
-.. _sensortile_box_pro_board:
-
-ST SensorTile.box PRO
-#####################
+.. zephyr:board:: sensortile_box_pro
 
 Overview
 ********
@@ -13,10 +10,6 @@ and developing apps based on remote motion and environmental sensor data.
 The SensorTile.box PRO board fits into a small plastic box with a long-life rechargeable
 battery, and communicates with a standard smartphone through its Bluetooth interface,
 providing data coming from the sensors.
-
-.. image:: img/sensortile_box_pro.jpg
-     :align: center
-     :alt: SensorTile.box PRO
 
 More information about the board can be found at the `SensorTile.box PRO website`_.
 
@@ -228,24 +221,7 @@ Console
 
 There are two possible options for Zephyr console output:
 
-- through USB as USB CDC/ACM class. This is the default case present in the board dts file
-  and is enabled by :kconfig:option:`CONFIG_BOARD_SERIAL_BACKEND_CDC_ACM`.
-
-.. code-block:: dts
-   :caption: boards/st/sensortile_box_pro/sensortile_box_pro.dts
-
-   / {
-       chosen {
-          zephyr,console = &cdc_acm_uart0;
-        };
-     };
-
-     &zephyr_udc0 {
-        cdc_acm_uart0: cdc_acm_uart0 {
-                compatible = "zephyr,cdc-acm-uart";
-        };
-     };
-
+- through common CDC ACM UART backend configuration for all boards
 
 - through UART4 which is available on SWD connector (JP2). In this case a JTAG adapter
   can be used to connect SensorTile.box PRO and have both SWD and console lines available.

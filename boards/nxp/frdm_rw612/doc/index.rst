@@ -1,7 +1,4 @@
-.. _frdm_rw612:
-
-NXP FRDM_RW612
-##############
+.. zephyr:board:: frdm_rw612
 
 Overview
 ********
@@ -39,8 +36,6 @@ Supported Features
 +-----------+------------+-----------------------------------+
 | USART     | on-chip    | serial                            |
 +-----------+------------+-----------------------------------+
-| BLE       | on-chip    | Bluetooth                         |
-+-----------+------------+-----------------------------------+
 | DMA       | on-chip    | dma                               |
 +-----------+------------+-----------------------------------+
 | SPI       | on-chip    | spi                               |
@@ -54,6 +49,8 @@ Supported Features
 | USBOTG    | on-chip    | usb                               |
 +-----------+------------+-----------------------------------+
 | CTIMER    | on-chip    | counter                           |
++-----------+------------+-----------------------------------+
+| SCTIMER   | on-chip    | pwm                               |
 +-----------+------------+-----------------------------------+
 | MRT       | on-chip    | counter                           |
 +-----------+------------+-----------------------------------+
@@ -70,6 +67,8 @@ Supported Features
 +-----------+------------+-----------------------------------+
 | ENET      | on-chip    | ethernet                          |
 +-----------+------------+-----------------------------------+
+| Wi-Fi     | on-chip    | Wi-Fi                             |
++-----------+------------+-----------------------------------+
 
 The default configuration can be found in the defconfig file:
 
@@ -80,7 +79,7 @@ Other hardware features are not currently supported
 Fetch Binary Blobs
 ******************
 
-To support Bluetooth, frdm_rw612 requires fetching binary blobs, which can be
+To support Bluetooth or Wi-Fi, frdm_rw612 requires fetching binary blobs, which can be
 achieved by running the following command:
 
 .. code-block:: console
@@ -156,6 +155,16 @@ the ``Fetch Binary Blobs`` section first.
 
 frdm_rw612 platform supports the monolithic feature. The required binary blob
 ``<zephyr workspace>/modules/hal/nxp/zephyr/blobs/rw61x_sb_ble_a2.bin`` will be linked
+with the application image directly, forming one single monolithic image.
+
+Wi-Fi
+=====
+
+Wi-Fi functionality requires to fetch binary blobs, so make sure to follow
+the ``Fetch Binary Blobs`` section first.
+
+frdm_rw612 platform supports the monolithic feature. The required binary blob
+``<zephyr workspace>/modules/hal/nxp/zephyr/blobs/rw61x_sb_wifi_a2.bin`` will be linked
 with the application image directly, forming one single monolithic image.
 
 Resources

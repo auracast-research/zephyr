@@ -107,10 +107,11 @@ static void bap_broadcast_assistant_scan_cb(const struct bt_le_scan_recv_info *i
 	char le_addr[BT_ADDR_LE_STR_LEN];
 
 	bt_addr_le_to_str(info->addr, le_addr, sizeof(le_addr));
-	shell_print(ctx_shell,
-		    "[DEVICE]: %s, broadcast_id 0x%06X, interval (ms) %u), SID 0x%x, RSSI %i",
-		    le_addr, broadcast_id, BT_GAP_PER_ADV_INTERVAL_TO_MS(info->interval), info->sid,
-		    info->rssi);
+	shell_print(
+		ctx_shell,
+		"[DEVICE]: %s, broadcast_id 0x%06X, interval (ms) %u (0x%04x)), SID 0x%x, RSSI %i",
+		le_addr, broadcast_id, BT_GAP_PER_ADV_INTERVAL_TO_MS(info->interval),
+		info->interval, info->sid, info->rssi);
 }
 
 static bool metadata_entry(struct bt_data *data, void *user_data)
@@ -139,8 +140,7 @@ static void bap_broadcast_assistant_recv_state_cb(
 	}
 
 	bt_addr_le_to_str(&state->addr, le_addr, sizeof(le_addr));
-	bin2hex(state->bad_code, BT_AUDIO_BROADCAST_CODE_SIZE,
-		bad_code, sizeof(bad_code));
+	bin2hex(state->bad_code, BT_ISO_BROADCAST_CODE_SIZE, bad_code, sizeof(bad_code));
 
 	is_bad_code = state->encrypt_state == BT_BAP_BIG_ENC_STATE_BAD_CODE;
 	shell_print(ctx_shell,
@@ -1041,7 +1041,7 @@ static int cmd_bap_broadcast_assistant_add_pa_sync(const struct shell *sh,
 static int cmd_bap_broadcast_assistant_broadcast_code(const struct shell *sh,
 						      size_t argc, char **argv)
 {
-	uint8_t broadcast_code[BT_AUDIO_BROADCAST_CODE_SIZE] = { 0 };
+	uint8_t broadcast_code[BT_ISO_BROADCAST_CODE_SIZE] = {0};
 	size_t broadcast_code_len;
 	unsigned long src_id;
 	int result = 0;
@@ -1060,7 +1060,7 @@ static int cmd_bap_broadcast_assistant_broadcast_code(const struct shell *sh,
 	}
 
 	broadcast_code_len = strlen(argv[2]);
-	if (!IN_RANGE(broadcast_code_len, 1, BT_AUDIO_BROADCAST_CODE_SIZE)) {
+	if (!IN_RANGE(broadcast_code_len, 1, BT_ISO_BROADCAST_CODE_SIZE)) {
 		shell_error(sh, "Invalid broadcast code length: %zu", broadcast_code_len);
 
 		return -ENOEXEC;

@@ -1,7 +1,4 @@
-.. _s32z2xxdc2:
-
-NXP X-S32Z27X-DC (DC2)
-######################
+.. zephyr:board:: s32z2xxdc2
 
 Overview
 ********
@@ -60,6 +57,8 @@ The boards support the following hardware features:
 | LPI2C     | on-chip    | i2c                                 |
 +-----------+------------+-------------------------------------+
 | EDMA      | on-chip    | dma                                 |
++-----------+------------+-------------------------------------+
+| DSPI      | on-chip    | spi                                 |
 +-----------+------------+-------------------------------------+
 
 Other hardware features are not currently supported by the port.
