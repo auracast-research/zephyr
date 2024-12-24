@@ -66,6 +66,18 @@ static void isr_rx_ctrl_recv(struct lll_sync_iso *lll, struct pdu_bis *pdu);
 static uint8_t trx_cnt;
 static uint8_t crc_ok_anchor;
 
+/* If set to true the lll will not try to decrypt encrypted PDUs and forward them
+ * to the upper layer as if they were plain text PDUs. The MIC is kept attached
+ * to the PDU */
+bool bypass_encryption = false;
+
+/* If set to true the lll will sync to the stream and randomly send bogus PDUs */
+bool bisquit_mic = false;
+
+bool has_sniffed_pdu = false;
+uint8_t sniffed_bis_pdu_header[2];
+uint8_t bisquit_buf[CONFIG_BT_ISO_TX_MTU] = { 0x42 };
+
 int lll_sync_iso_init(void)
 {
 	int err;
@@ -313,7 +325,7 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 
 	/* Encryption */
 	if (IS_ENABLED(CONFIG_BT_CTLR_BROADCAST_ISO_ENC) &&
-	    lll->enc) {
+	    lll->enc && !bypass_encryption) {
 		uint64_t payload_count;
 		uint8_t pkt_flags;
 
@@ -337,7 +349,8 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 		pkt_flags = RADIO_PKT_CONF_FLAGS(RADIO_PKT_CONF_PDU_TYPE_BIS,
 						 phy,
 						 RADIO_PKT_CONF_CTE_DISABLED);
-		radio_pkt_configure(RADIO_PKT_CONF_LENGTH_8BIT, lll->max_pdu,
+		uint8_t maxlen = bypass_encryption ? lll->max_pdu + PDU_MIC_SIZE : lll->max_pdu;
+		radio_pkt_configure(RADIO_PKT_CONF_LENGTH_8BIT, maxlen,
 				    pkt_flags);
 		radio_pkt_rx_set(node_rx->pdu);
 	}
@@ -460,7 +473,7 @@ static void isr_rx_estab(void *param)
 	lll = param;
 
 	/* Check for MIC failures for encrypted Broadcast ISO streams */
-	if (IS_ENABLED(CONFIG_BT_CTLR_BROADCAST_ISO_ENC) && crc_ok && lll->enc) {
+	if (IS_ENABLED(CONFIG_BT_CTLR_BROADCAST_ISO_ENC) && crc_ok && lll->enc && !bypass_encryption) {
 		struct node_rx_pdu *node_rx;
 		struct pdu_bis *pdu;
 
@@ -659,7 +672,7 @@ static void isr_rx(void *param)
 			uint16_t handle;
 
 			if (IS_ENABLED(CONFIG_BT_CTLR_BROADCAST_ISO_ENC) &&
-			    lll->enc) {
+			    lll->enc && !bypass_encryption) {
 				bool mic_failure;
 				uint32_t done;
 
@@ -1000,7 +1013,7 @@ isr_rx_next_subevent:
 
 	/* Encryption */
 	if (IS_ENABLED(CONFIG_BT_CTLR_BROADCAST_ISO_ENC) &&
-	    lll->enc) {
+	    lll->enc && !bypass_encryption) {
 		uint64_t payload_count;
 		struct pdu_bis *pdu;
 

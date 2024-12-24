@@ -44,6 +44,8 @@ int hci_acl_handle(struct net_buf *acl, struct net_buf **evt);
 void hci_acl_encode(struct node_rx_pdu *node_rx, struct net_buf *buf);
 int hci_iso_handle(struct net_buf *acl, struct net_buf **evt);
 void hci_iso_encode(struct net_buf *buf, uint16_t handle, uint8_t flags);
+void hci_iso_evt_encode(struct node_rx_pdu *node_rx, struct net_buf *buf);
+void hci_iso_raw_evt_big_encode(struct pdu_big_info *bi, struct net_buf *buf);
 int hci_vendor_cmd_handle(uint16_t ocf, struct net_buf *cmd,
 			  struct net_buf **evt);
 uint8_t hci_vendor_read_static_addr(struct bt_hci_vs_static_addr addrs[],

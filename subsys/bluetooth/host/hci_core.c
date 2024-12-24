@@ -100,6 +100,7 @@ struct bt_dev bt_dev = {
 };
 
 static bt_ready_cb_t ready_cb;
+static bt_hci_iso_raw_dump_cb hci_iso_raw_dump_cb;
 
 #if defined(CONFIG_BT_HCI_VS_EVT_USER)
 static bt_hci_vnd_evt_cb_t *hci_vnd_evt_cb;
@@ -2717,6 +2718,21 @@ static void hci_vendor_event(struct net_buf *buf)
 	}
 }
 
+/* Auracast Hacker's Toolkit specific callback stuff. These callbacks are called
+ * whenever a raw PDU is received via an HCI event.
+ */
+void bt_hci_iso_raw_dump_cb_register(bt_hci_iso_raw_dump_cb cb)
+{
+	hci_iso_raw_dump_cb = cb;	
+}
+
+void bt_hci_evt_iso_raw_dump_handler(struct net_buf *buf)
+{
+	if (hci_iso_raw_dump_cb) {
+		hci_iso_raw_dump_cb(buf);
+	}
+}
+
 static const struct event_handler meta_events[] = {
 #if defined(CONFIG_BT_OBSERVER)
 	EVENT_HANDLER(BT_HCI_EVT_LE_ADVERTISING_REPORT, bt_hci_le_adv_report,
@@ -2971,6 +2987,9 @@ static const struct event_handler normal_events[] = {
 #endif /* CONFIG_BT_REMOTE_VERSION */
 	EVENT_HANDLER(BT_HCI_EVT_HARDWARE_ERROR, hci_hardware_error,
 		      sizeof(struct bt_hci_evt_hardware_error)),
+	EVENT_HANDLER(BT_HCI_EVT_ISO_RAW_DUMP,
+		      bt_hci_evt_iso_raw_dump_handler,
+		      sizeof(struct bt_hci_evt_iso_raw_dump)),
 };
 
 

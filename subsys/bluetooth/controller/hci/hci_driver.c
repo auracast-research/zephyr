@@ -501,6 +501,11 @@ static inline struct net_buf *encode_node(struct node_rx_pdu *node_rx,
 			stream_handle = LL_BIS_SYNC_IDX_FROM_HANDLE(node_rx->hdr.handle);
 			stream = ull_sync_iso_stream_get(stream_handle);
 
+			/* Auracast Hacker's Toolkit: send raw BIS PDU before applying any ISOAL
+			 * processing. */
+			buf = bt_buf_get_rx(BT_BUF_EVT, K_FOREVER);
+			hci_iso_evt_encode(node_rx, buf);
+
 			/* Check validity of the data path sink. FIXME: A channel disconnect race
 			 * may cause ISO data pending without valid data path.
 			 */

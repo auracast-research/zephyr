@@ -3843,6 +3843,20 @@ struct bt_hci_evt_le_cs_procedure_enable_complete {
 	uint16_t max_procedure_len;
 } __packed;
 
+/* Auracast Hacker's Toolkit custom HCI events */
+#define BT_HCI_EVT_ISO_RAW_DUMP 0xA1
+struct bt_hci_evt_iso_raw_dump {
+	uint64_t payload_number;
+	uint8_t len;
+	uint8_t type;
+} __packed;
+
+#define BT_HCI_EVT_ISO_RAW_DUMP_PDU 0
+#define BT_HCI_EVT_ISO_RAW_DUMP_BIG 1
+struct net_buf;
+typedef void (*bt_hci_iso_raw_dump_cb)(struct net_buf *buf);
+void bt_hci_iso_raw_dump_cb_register(bt_hci_iso_raw_dump_cb cb);
+
 /* Event mask bits */
 
 #define BT_EVT_BIT(n) (1ULL << (n))

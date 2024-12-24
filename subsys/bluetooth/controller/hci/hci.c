@@ -105,6 +105,10 @@ LOG_MODULE_REGISTER(bt_ctlr_hci);
  */
 static uint16_t _opcode;
 
+/* Auracast Hacker's Toolkit specific configs */
+extern bool bypass_encryption;
+extern bool bisquit_mic;
+
 #if CONFIG_BT_CTLR_DUP_FILTER_LEN > 0
 /* NOTE: Duplicate filter uses two LS bits value of standard advertising modes:
  *       0 - Non-Connectable Non-Scannable advertising report
@@ -5592,6 +5596,27 @@ struct net_buf *hci_cmd_handle(struct net_buf *cmd, void **node_rx)
 		break;
 	}
 
+	/* Auracast-Hacker's-Toolkit custom HCI command to disable MIC checks
+	 * and decryption of BIS PDUs. This is really hacky, but it works and
+	 * the change is only slightly invasive. I've always wanted to have my
+	 * own HCI comman!
+	 */
+	#ifdef CONFIG_BT_CTLR_SYNC_ISO
+	if (_opcode == 0x0666) {
+		bypass_encryption = true;
+		return cmd_complete_status(BT_HCI_ERR_SUCCESS);
+	}
+
+	/* opcode to enable BISQUIT-MIC attack. Controller synchronizes to
+	 * stream and then randomly sends PDUs with bogus content.
+	 */	
+	else if (_opcode == 0x0667) {
+		bypass_encryption = true;
+		bisquit_mic = true;
+		return cmd_complete_status(BT_HCI_ERR_SUCCESS);
+	}
+	#endif
+
 	if (err == -EINVAL) {
 		evt = cmd_status(BT_HCI_ERR_UNKNOWN_CMD);
 	}
@@ -7823,6 +7848,12 @@ no_ext_hdr:
 		} else {
 			sep->encryption = 0U;
 		}
+
+		// Send addition HCI event with raw BIGInfo content
+		struct net_buf *raw_buf;
+		raw_buf = bt_buf_get_rx(BT_BUF_EVT, BUF_GET_TIMEOUT);
+		net_buf_frag_add(buf, raw_buf);
+		hci_iso_raw_evt_big_encode(bi, raw_buf);
 	}
 }
 
@@ -8913,6 +8944,45 @@ void hci_acl_encode(struct node_rx_pdu *node_rx, struct net_buf *buf)
 	}
 }
 #endif /* CONFIG_BT_CONN */
+
+void hci_iso_evt_encode(struct node_rx_pdu *node_rx, struct net_buf *buf) {
+	struct pdu_data *pdu_data = (void *)node_rx->pdu;
+	struct bt_hci_evt_iso_raw_dump *evt;
+	uint8_t *data;
+	uint8_t len;
+	
+	len = sizeof(*evt) + pdu_data->len + 2;
+	hci_evt_create(buf, BT_HCI_EVT_ISO_RAW_DUMP, len);
+
+	evt = (void*) net_buf_add(buf, sizeof(*evt));
+	#ifdef CONFIG_BT_CTLR_SYNC_ISO
+	evt->payload_number = node_rx->rx_iso_meta.payload_number;
+	#endif
+	evt->len = pdu_data->len + 2;
+	evt->type = BT_HCI_EVT_ISO_RAW_DUMP_PDU;
+
+	data = net_buf_add(buf, pdu_data->len + 2);
+	// copy header, but omit the vendor specific weird NULL byte
+	memcpy(data, pdu_data, 2);
+	memcpy(data+2, pdu_data->lldata, pdu_data->len);
+}
+
+void hci_iso_raw_evt_big_encode(struct pdu_big_info *bi, struct net_buf *buf) {
+	struct bt_hci_evt_iso_raw_dump *evt;
+	uint8_t *data;
+	uint8_t len;
+	
+	len = sizeof(*evt) + sizeof(*bi);
+	hci_evt_create(buf, BT_HCI_EVT_ISO_RAW_DUMP, len);
+
+	evt = (void*) net_buf_add(buf, sizeof(*evt));
+	evt->payload_number = 0;
+	evt->len = sizeof(*bi);
+	evt->type = BT_HCI_EVT_ISO_RAW_DUMP_BIG;
+
+	data = net_buf_add(buf, sizeof(*bi));
+	memcpy(data, (uint8_t *)bi, sizeof(*bi));
+}
 
 void hci_evt_encode(struct node_rx_pdu *node_rx, struct net_buf *buf)
 {
