@@ -50,7 +50,7 @@ static inline uint32_t sniffer_tap_dwt_cyc(void)
 #define SNIFFER_TAP_KIND_PA        1U  /* Periodic-adv PDU (AUX_SYNC_IND / chain)     */
 
 struct sniffer_tap_pdu {
-	uint32_t timestamp_us;    /* device uptime in microseconds */
+	uint64_t timestamp_us;    /* device uptime in microseconds              */
 	uint32_t access_addr;     /* AA on the wire, little-endian layout       */
 	uint16_t event_counter;   /* BIG event counter (BIS kind only)          */
 	uint8_t  subevent;        /* linear within-BIS SE index (BIS only)      */

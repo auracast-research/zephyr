@@ -23,6 +23,32 @@ static inline uint32_t sniffer_dwt_cyc_to_us(uint32_t cyc)
 	return cyc >> 6;
 }
 
+static uint64_t tap_ts_wrap_base_us;
+static uint32_t tap_ts_last_us;
+static bool     tap_ts_init;
+
+static uint64_t sniffer_tap_timestamp_us(void)
+{
+	uint32_t raw_us = sniffer_dwt_cyc_to_us(sniffer_tap_dwt_cyc());
+	unsigned int key;
+	uint64_t result;
+
+	key = irq_lock();
+
+	if (!tap_ts_init) {
+		tap_ts_init = true;
+	} else if (raw_us < tap_ts_last_us) {
+		/* One full wrap elapsed since the last reading. */
+		tap_ts_wrap_base_us += (UINT64_C(1) << 32) >> 6;
+	}
+	tap_ts_last_us = raw_us;
+	result = tap_ts_wrap_base_us + raw_us;
+
+	irq_unlock(key);
+
+	return result;
+}
+
 static void sniffer_dwt_enable(void)
 {
 	static bool enabled;
@@ -157,13 +183,32 @@ static void drain_work_handler(struct k_work *w)
 K_THREAD_STACK_DEFINE(tap_hot_drain_stack, TAP_HOT_DRAIN_STACK);
 static struct k_thread tap_hot_drain_thread;
 
+static inline void tap_hot_process_one(struct sniffer_tap_pdu *rec)
+{
+	sniffer_tap_cb_t cb = user_cb;
+
+	if (rec->_deferred_raw != NULL) {
+		memcpy(&rec->pdu[2],
+		       rec->_deferred_raw + PDU_BIS_LL_HEADER_SIZE,
+		       rec->_deferred_len);
+		rec->_deferred_raw = NULL;
+	}
+
+	if (cb != NULL) {
+		cb(rec);
+	}
+}
+
 static void tap_hot_drain_fn(void *a, void *b, void *c)
 {
 	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
 
 	while (true) {
-		uint32_t r = tap_hot_read_idx;
-		uint32_t w = (uint32_t)atomic_get(&tap_hot_write_idx);
+		uint32_t r;
+		uint32_t w;
+
+		r = tap_hot_read_idx;
+		w = (uint32_t)atomic_get(&tap_hot_write_idx);
 
 		if (r == w) {
 			k_usleep(TAP_HOT_DRAIN_POLL_US);
@@ -171,23 +216,9 @@ static void tap_hot_drain_fn(void *a, void *b, void *c)
 		}
 
 		while (r != w) {
-			sniffer_tap_cb_t cb = user_cb;
-			struct sniffer_tap_pdu *rec =
-				&tap_hot_ring[r & TAP_HOT_RING_MASK];
-
-			if (rec->_deferred_raw != NULL) {
-				memcpy(&rec->pdu[2],
-				       rec->_deferred_raw + PDU_BIS_LL_HEADER_SIZE,
-				       rec->_deferred_len);
-				rec->_deferred_raw = NULL;
-			}
-
-			if (cb != NULL) {
-				cb(rec);
-			}
+			tap_hot_process_one(&tap_hot_ring[r & TAP_HOT_RING_MASK]);
 			r++;
 			tap_hot_read_idx = r;
-
 			w = (uint32_t)atomic_get(&tap_hot_write_idx);
 		}
 	}
@@ -266,39 +297,12 @@ void sniffer_tap_mark_ctrl_set(void)
 
 void sniffer_tap_mark_ctrl_recv(uint8_t b0, uint8_t len)
 {
+	ARG_UNUSED(b0);
+	ARG_UNUSED(len);
+
 	atomic_inc(&ctrl_recv_marked);
 
-	struct sniffer_tap_pdu rec;
-
-	memset(&rec, 0, sizeof(rec));
-	rec.pdu_kind     = SNIFFER_TAP_KIND_BIS;
-	rec.timestamp_us = sniffer_dwt_cyc_to_us(sniffer_tap_dwt_cyc());
-	rec.chan         = pending_chan;
-	rec.flags        = SNIFFER_TAP_FLAG_CRC_OK;
-	rec.pdu[0]       = b0;
-
-	uint16_t copy = len;
-	const uint16_t hw_max = (uint16_t)sizeof(struct pdu_big_ctrl);
-	if (copy > hw_max) {
-		copy = hw_max;
-	}
-	if (copy > SNIFFER_TAP_PDU_MAX - 2U) {
-		copy = SNIFFER_TAP_PDU_MAX - 2U;
-	}
-	rec.pdu[1] = (uint8_t)copy;
-
-	const uint8_t *raw = (const uint8_t *)radio_pkt_big_ctrl_get();
-	if (copy > 0U && raw != NULL) {
-		memcpy(&rec.pdu[2], raw + PDU_BIS_LL_HEADER_SIZE, copy);
-	}
-	rec.pdu_len = 2U + copy;
-
-	if (k_msgq_put(&tap_msgq, &rec, K_NO_WAIT) == 0) {
-		atomic_inc(&ctrl_recv_forwarded);
-		k_work_submit(&drain_work);
-	} else {
-		atomic_inc(&drop_count);
-	}
+	atomic_inc(&ctrl_recv_forwarded);
 }
 
 uint32_t sniffer_tap_bis_max_marked(void)     { return atomic_get(&bis_max_marked); }
@@ -546,6 +550,7 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 	struct node_rx_pdu *node_rx;
 	uint8_t aa[4];
 	uint32_t tap_cyc_start;
+	bool is_control_se;
 
 	if (lll == NULL) {
 		return;
@@ -572,6 +577,14 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 	last_cssn_curr = lll->cssn_curr;
 	last_cssn_next = lll->cssn_next;
 
+	/* BIG Control Subevent: irc_curr==irc, walker's final round,
+	 * bis_curr==num_bis, lll->ctrl. */
+	is_control_se = (lll->bn_curr  == lll->bn)   &&
+			(lll->irc_curr == lll->irc)  &&
+			(lll->ptc_curr == lll->ptc)  &&
+			(lll->bis_curr == lll->num_bis) &&
+			lll->ctrl;
+
 	rec = tap_hot_ring_alloc();
 	if (rec == NULL) {
 		atomic_inc(&drop_count);
@@ -580,7 +593,7 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 	}
 
 	rec->pdu_kind      = SNIFFER_TAP_KIND_BIS;
-	rec->timestamp_us  = sniffer_dwt_cyc_to_us(sniffer_tap_dwt_cyc());
+	rec->timestamp_us  = sniffer_tap_timestamp_us();
 	rec->chan          = pending_chan;
 	rec->phy           = lll->phy;
 	rec->bis           = lll->bis_curr;
@@ -702,12 +715,6 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 		rec->derived |= SNIFFER_TAP_DFLAG_CIPHERTEXT;
 	}
 
-	const bool is_control_se = (lll->bn_curr  == lll->bn)   &&
-				   (lll->irc_curr == lll->irc)  &&
-				   (lll->ptc_curr == lll->ptc)  &&
-				   (lll->bis_curr == lll->num_bis) &&
-				   lll->ctrl;
-
 	if (is_control_se) {
 		atomic_inc(&ctrl_se_detected);
 	}
@@ -760,11 +767,28 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 		rec->pdu_len = 2U + payload_len + copy_extra;
 
 		bool will_store = false;
-		if (!is_control_se && payload_len > 0U) {
+		if (!is_control_se && payload_len > 0U && crc_ok &&
+		    ull_iso_pdu_rx_alloc_peek(2U) != NULL) {
 			uint32_t stream_curr = lll->stream_curr;
+			uint32_t payload_index;
+
+			if (lll->ptc_curr > 0U) {
+				uint32_t ptx_idx = (uint32_t)lll->ptc_curr - 1U;
+				uint32_t ptx_group_idx = ptx_idx / lll->bn;
+				uint32_t ptx_payload_idx =
+					ptx_idx - ptx_group_idx * lll->bn;
+				uint32_t ptx_group_mult =
+					(ptx_group_idx + 1U) * lll->pto;
+
+				payload_index = ptx_payload_idx +
+						ptx_group_mult * lll->bn;
+			} else {
+				payload_index = lll->bn_curr - 1U;
+			}
+
 			uint32_t payload_offset =
 				((uint32_t)lll->latency_event * lll->bn) +
-				(lll->bn_curr - 1U);
+				payload_index;
 			if (payload_offset < lll->payload_count_max &&
 			    stream_curr < BT_CTLR_SYNC_ISO_STREAM_MAX) {
 				uint32_t idx = lll->payload_tail + payload_offset;
@@ -813,7 +837,7 @@ void sniffer_tap_pa_rx_done(const struct lll_sync *lll,
 	memset(&rec, 0, sizeof(rec));
 
 	rec.pdu_kind     = SNIFFER_TAP_KIND_PA;
-	rec.timestamp_us = sniffer_dwt_cyc_to_us(sniffer_tap_dwt_cyc());
+	rec.timestamp_us = sniffer_tap_timestamp_us();
 	rec.chan         = pending_chan;
 	rec.phy          = lll->phy;
 	/* Not BIS. */
