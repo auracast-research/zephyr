@@ -214,6 +214,15 @@ add_subdirectory_ifdef(
   ll_sw/nordic
   )
 
+add_subdirectory(ll_sw/sniffer)
+
+add_subdirectory(ll_sw/bison)
+
+zephyr_include_directories(
+  ${CMAKE_CURRENT_LIST_DIR}/ll_sw/bison
+  ${CMAKE_CURRENT_LIST_DIR}/ll_sw/sniffer
+  )
+
 add_subdirectory_ifdef(
   CONFIG_BT_LLL_VENDOR_OPENISA
   ll_sw/openisa

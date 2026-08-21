@@ -124,3 +124,7 @@ zephyr_library_compile_options_ifdef(
   CONFIG_BT_CTLR_OPTIMIZE_FOR_SPEED
   ${COMPILER_OPTIMIZE_FOR_SPEED_FLAG}
   )
+
+zephyr_library_include_directories(
+  ../bison
+  )

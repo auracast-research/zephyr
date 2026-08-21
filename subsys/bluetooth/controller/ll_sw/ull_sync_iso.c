@@ -58,6 +58,10 @@
 
 #include "hal/debug.h"
 
+#include "sniffer_tap.h"
+
+#include "bison_lll_hijack.h"
+
 static int init_reset(void);
 static struct ll_sync_iso_set *sync_iso_get(uint8_t handle);
 static struct ll_sync_iso_set *sync_iso_alloc(uint8_t handle);
@@ -141,9 +145,19 @@ uint8_t ll_big_sync_create(uint8_t big_handle, uint16_t sync_handle,
 		return BT_HCI_ERR_CMD_DISALLOWED;
 	};
 
-	/* Check if requested encryption matches */
+	/* Check if requested encryption matches. */
+	
+	/* 
+	 * Two exceptions here: raw sniffing or BISQuit.
+	 */
 	if (encryption != sync->enc) {
-		return BT_HCI_ERR_ENC_MODE_NOT_ACCEPTABLE;
+		bool allow = false;
+		allow = allow ||
+			(sniffer_tap_raw_enc_get() && sync->enc && !encryption);
+		allow = allow || bison_lll_hijack_bisquit_bypass_get();
+		if (!allow) {
+			return BT_HCI_ERR_ENC_MODE_NOT_ACCEPTABLE;
+		}
 	}
 
 	/* Check if free BISes available */

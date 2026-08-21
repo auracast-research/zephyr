@@ -45,6 +45,8 @@
 #include <soc.h>
 #include "hal/debug.h"
 
+#include "sniffer_tap.h"
+
 static int init_reset(void);
 static int create_prepare_cb(struct lll_prepare_param *p);
 static int prepare_cb(struct lll_prepare_param *p);
@@ -147,6 +149,7 @@ void lll_sync_aux_prepare_cb(struct lll_sync *lll,
 				sys_get_le24(lll->crc_init));
 
 	lll_chan_set(lll_aux->chan);
+	sniffer_tap_chan_set(lll_aux->chan);
 
 	radio_isr_set(isr_rx_aux_chain, lll);
 
@@ -454,6 +457,7 @@ static int prepare_cb_common(struct lll_prepare_param *p, uint8_t chan_idx)
 					sys_get_le24(lll->crc_init));
 
 	lll_chan_set(chan_idx);
+	sniffer_tap_chan_set(chan_idx);
 
 	node_rx = ull_pdu_rx_alloc_peek(1);
 	LL_ASSERT_DBG(node_rx);
@@ -697,6 +701,7 @@ static void isr_aux_setup(void *param)
 			    RADIO_PKT_CONF_PHY(phy_aux));
 
 	lll_chan_set(aux_ptr->chan_idx);
+	sniffer_tap_chan_set(aux_ptr->chan_idx);
 
 	radio_pkt_rx_set(node_rx->pdu);
 
@@ -946,6 +951,10 @@ static void isr_rx_adv_sync_estab(void *param)
 	/* Clear radio rx status and events */
 	lll_isr_rx_status_reset();
 
+	if (trx_done) {
+		sniffer_tap_pa_rx_done(lll, crc_ok, rssi_ready);
+	}
+
 	/* No Rx */
 	if (!trx_done) {
 		/* TODO: Combine the early exit with above if-then-else block
@@ -1035,6 +1044,10 @@ static void isr_rx_adv_sync(void *param)
 	/* Clear radio rx status and events */
 	lll_isr_rx_status_reset();
 
+	if (trx_done) {
+		sniffer_tap_pa_rx_done(lll, crc_ok, rssi_ready);
+	}
+
 	/* No Rx */
 	if (!trx_done) {
 		/* TODO: Combine the early exit with above if-then-else block
@@ -1108,6 +1121,10 @@ static void isr_rx_aux_chain(void *param)
 
 	/* Clear radio rx status and events */
 	lll_isr_rx_status_reset();
+
+	if (trx_done) {
+		sniffer_tap_pa_rx_done(lll, crc_ok, rssi_ready);
+	}
 
 	/* No Rx */
 	if (!trx_done) {

