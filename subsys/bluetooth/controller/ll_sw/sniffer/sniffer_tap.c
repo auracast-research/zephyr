@@ -325,6 +325,74 @@ void sniffer_tap_note_arm_miss(void)
 }
 uint32_t sniffer_tap_arm_misses(void) { return atomic_get(&arm_misses); }
 
+void sniffer_tap_note_anchor_delta(uint32_t delta_us)
+{
+	anchor_delta_last = delta_us;
+	if (delta_us < anchor_delta_min) {
+		anchor_delta_min = delta_us;
+	}
+	if (delta_us > anchor_delta_max) {
+		anchor_delta_max = delta_us;
+	}
+	anchor_delta_sum += delta_us;
+	anchor_delta_count++;
+}
+uint32_t sniffer_tap_anchor_delta_min(void) { return (anchor_delta_min == UINT32_MAX) ? 0U : anchor_delta_min; }
+uint32_t sniffer_tap_anchor_delta_max(void) { return anchor_delta_max; }
+uint32_t sniffer_tap_anchor_delta_last(void){ return anchor_delta_last; }
+uint32_t sniffer_tap_anchor_delta_mean(void)
+{
+	if (anchor_delta_count == 0U) {
+		return 0U;
+	}
+	return (uint32_t)(anchor_delta_sum / anchor_delta_count);
+}
+uint32_t sniffer_tap_anchor_delta_count(void) { return anchor_delta_count; }
+
+void sniffer_tap_note_event_start(uint32_t widening_us)
+{
+	atomic_inc(&events_prepared);
+	if (cur_event_slot0_seen) {
+		atomic_inc(&events_with_slot0);
+	}
+	cur_event_slot0_seen = 0U;
+
+	atomic_set(&widening_last_us, (atomic_val_t)widening_us);
+	atomic_val_t cur = atomic_get(&widening_max_us);
+	if ((atomic_val_t)widening_us > cur) {
+		atomic_set(&widening_max_us, (atomic_val_t)widening_us);
+	}
+}
+uint32_t sniffer_tap_events_prepared(void)   { return atomic_get(&events_prepared); }
+uint32_t sniffer_tap_events_with_slot0(void) { return atomic_get(&events_with_slot0); }
+uint32_t sniffer_tap_widening_last_us(void)  { return atomic_get(&widening_last_us); }
+uint32_t sniffer_tap_widening_max_us(void)   { return atomic_get(&widening_max_us); }
+
+void sniffer_tap_note_latency(uint16_t latency)
+{
+	atomic_inc(&latency_events);
+	uint8_t bin = (latency >= LATENCY_HIST_BINS) ?
+			(uint8_t)(LATENCY_HIST_BINS - 1U) : (uint8_t)latency;
+	atomic_inc(&latency_histogram[bin]);
+
+	/* Track max without a spinlock; a lost update is fine for a
+	 * best-effort diagnostic. */
+	atomic_val_t cur = atomic_get(&latency_max);
+	if ((atomic_val_t)latency > cur) {
+		atomic_set(&latency_max, (atomic_val_t)latency);
+	}
+}
+uint32_t sniffer_tap_latency_events(void) { return atomic_get(&latency_events); }
+uint32_t sniffer_tap_latency_max(void)    { return atomic_get(&latency_max); }
+uint32_t sniffer_tap_latency_bin(uint8_t bin)
+{
+	if (bin >= LATENCY_HIST_BINS) {
+		return 0U;
+	}
+	return (uint32_t)atomic_get(&latency_histogram[bin]);
+}
+uint8_t sniffer_tap_latency_bins(void) { return (uint8_t)LATENCY_HIST_BINS; }
+
 uint32_t sniffer_tap_events_seen(void)         { return atomic_get(&events_seen); }
 uint32_t sniffer_tap_events_full_data(void)    { return atomic_get(&events_full_data); }
 uint32_t sniffer_tap_events_no_arm_miss(void)  { return atomic_get(&events_no_arm_miss); }
@@ -447,6 +515,22 @@ void sniffer_tap_probe_reset(void)
 	for (uint32_t i = 0; i < EVENT_WINDOW; i++) {
 		payload_seen[i] = 0U;
 	}
+	atomic_clear(&latency_events);
+	atomic_clear(&latency_max);
+	for (uint32_t i = 0; i < LATENCY_HIST_BINS; i++) {
+		atomic_clear(&latency_histogram[i]);
+	}
+	atomic_clear(&widening_max_us);
+	atomic_clear(&widening_last_us);
+	atomic_clear(&events_prepared);
+	atomic_clear(&events_with_slot0);
+	cur_event_slot0_seen = 0U;
+	anchor_delta_min = UINT32_MAX;
+	anchor_delta_max = 0U;
+	anchor_delta_sum = 0U;
+	anchor_delta_count = 0U;
+	anchor_delta_last = 0U;
+	bis_seq_ctr = 0U;
 }
 
 void sniffer_tap_chan_set(uint8_t chan)
@@ -479,6 +563,12 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 	if (lll->ctrl) {
 		atomic_inc(&ctrl_flag_at_hook);
 	}
+	/* Mark slot-0 (nse=0 = BIS 1 first subevent, first bn, first
+	 * irc, no PTC, no ctrl) capture */
+	if (!lll->ctrl && lll->bis_curr == 1U && lll->bn_curr == 1U &&
+	    lll->irc_curr == 1U && lll->ptc_curr == 0U) {
+		cur_event_slot0_seen = 1U;
+	}
 	last_cssn_curr = lll->cssn_curr;
 	last_cssn_next = lll->cssn_next;
 
@@ -496,7 +586,7 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 	rec->bis           = lll->bis_curr;
 	rec->flags         = 0U;
 	rec->derived       = 0U;
-	rec->seq_ctr       = 0U;
+	rec->seq_ctr       = bis_seq_ctr++;
 	rec->rssi_dbm      = 0;
 	rec->pdu_len       = 0U;
 	rec->event_counter = 0U;
@@ -559,13 +649,17 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 	}
 
 	if (!lll->ctrl && lll->bis_curr >= 1U && lll->bis_curr <= lll->num_bis &&
-	    lll->bn_curr >= 1U && lll->bn_curr <= lll->bn) {
+	    lll->bn_curr >= 1U && lll->bn_curr <= lll->bn && lll->bn > 0U) {
+		uint32_t payload_offset =
+			(uint32_t)(lll->bn_curr - 1U) +
+			(uint32_t)lll->ptc_curr * (uint32_t)lll->pto;
 		uint32_t payload_event =
 			(uint32_t)rec->event_counter +
-			((uint32_t)lll->ptc_curr * lll->pto);
+			(payload_offset / lll->bn);
+		uint32_t target_bn_slot = payload_offset % lll->bn;
 		uint32_t slot = payload_event & EVENT_WINDOW_MASK;
 		uint32_t bit_idx = (lll->bis_curr - 1U) * lll->bn +
-				   (lll->bn_curr - 1U);
+				   target_bn_slot;
 		if (bit_idx < 32U) {
 			payload_seen[slot] |= (1U << bit_idx);
 		}

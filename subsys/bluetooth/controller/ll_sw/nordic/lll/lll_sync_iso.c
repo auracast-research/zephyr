@@ -198,6 +198,9 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 	/* Calculate the current event latency */
 	lll->lazy_prepare = p->lazy;
 	lll->latency_event = lll->latency_prepare + lll->lazy_prepare;
+	/* Diagnostic: track prepare-time latency so we can spot ULL
+	 * fall-behind that causes event_counter to jump */
+	sniffer_tap_note_latency((uint16_t)lll->latency_event);
 
 	/* Calculate the current event counter value */
 	event_counter = (lll->payload_count / lll->bn) + lll->latency_event;
@@ -433,6 +436,10 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 
 	ret = lll_prepare_done(lll);
 	LL_ASSERT_ERR(!ret);
+
+	/* Diagnostic: capture window widening + close previous event's
+	 * slot-0 tracking into events_with_slot0. */
+	sniffer_tap_note_event_start(lll->window_widening_event_us);
 
 	/* Calculate ahead the next subevent channel index */
 	if (false) {
@@ -697,6 +704,21 @@ static void isr_rx(void *param)
 
 		radio_tmr_aa_save(radio_tmr_aa_get() - se_offset_us);
 		radio_tmr_ready_save(radio_tmr_ready_get() - se_offset_us);
+		{
+			uint32_t aa_normalized;
+			uint32_t ready_normalized;
+			uint32_t delta_us;
+
+			aa_normalized = radio_tmr_aa_restore();
+			ready_normalized = radio_tmr_ready_restore();
+
+			if (aa_normalized >= ready_normalized) {
+				delta_us = aa_normalized - ready_normalized;
+			} else {
+				delta_us = 0U;
+			}
+			sniffer_tap_note_anchor_delta(delta_us);
+		}
 	}
 
 	/* Clear radio rx status and events */

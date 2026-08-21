@@ -148,6 +148,44 @@ uint32_t sniffer_tap_events_no_arm_miss(void);
 uint32_t sniffer_tap_payloads_captured(void);
 uint32_t sniffer_tap_payloads_expected(void);
 
+void sniffer_tap_note_latency(uint16_t latency);
+uint32_t sniffer_tap_latency_events(void);
+uint32_t sniffer_tap_latency_max(void);
+uint32_t sniffer_tap_latency_bin(uint8_t bin);
+uint8_t sniffer_tap_latency_bins(void);
+
+void sniffer_tap_note_event_start(uint32_t widening_us);
+uint32_t sniffer_tap_events_prepared(void);
+uint32_t sniffer_tap_events_with_slot0(void);
+uint32_t sniffer_tap_widening_last_us(void);
+uint32_t sniffer_tap_widening_max_us(void);
+
+void sniffer_tap_note_anchor_delta(uint32_t delta_us);
+uint32_t sniffer_tap_anchor_delta_min(void);
+uint32_t sniffer_tap_anchor_delta_max(void);
+uint32_t sniffer_tap_anchor_delta_last(void);
+uint32_t sniffer_tap_anchor_delta_mean(void);
+uint32_t sniffer_tap_anchor_delta_count(void);
+
+void sniffer_tap_note_latency(uint16_t latency);
+uint32_t sniffer_tap_latency_events(void);
+uint32_t sniffer_tap_latency_max(void);
+uint32_t sniffer_tap_latency_bin(uint8_t bin);
+uint8_t sniffer_tap_latency_bins(void);
+
+void sniffer_tap_note_event_start(uint32_t widening_us);
+uint32_t sniffer_tap_events_prepared(void);
+uint32_t sniffer_tap_events_with_slot0(void);
+uint32_t sniffer_tap_widening_last_us(void);
+uint32_t sniffer_tap_widening_max_us(void);
+
+void sniffer_tap_note_anchor_delta(uint32_t delta_us);
+uint32_t sniffer_tap_anchor_delta_min(void);
+uint32_t sniffer_tap_anchor_delta_max(void);
+uint32_t sniffer_tap_anchor_delta_last(void);
+uint32_t sniffer_tap_anchor_delta_mean(void);
+uint32_t sniffer_tap_anchor_delta_count(void);
+
 /* CTRL Probe: always try to receive CTRL PDUs even when none
  * have been indicated by the subevents in this event.
  * For diagnostic reasons, or to debug attacks.
