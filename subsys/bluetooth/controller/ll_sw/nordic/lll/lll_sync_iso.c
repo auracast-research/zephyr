@@ -450,6 +450,13 @@ static int prepare_cb_common(struct lll_prepare_param *p)
 			&lll->interleaved_data_chan[lll->bis_curr - 1U];
 		interleaved_data_chan->id = data_chan_id;
 
+		/* Initialize the first BIS's per-BIS PRN state */
+		(void)lll_chan_iso_event(event_counter, data_chan_id,
+					 lll->data_chan_map,
+					 lll->data_chan_count,
+					 &interleaved_data_chan->prn_s,
+					 &interleaved_data_chan->remap_idx);
+
 		next_chan_calc_int(lll, event_counter);
 #endif /* CONFIG_BT_CTLR_SYNC_ISO_INTERLEAVED */
 
@@ -1190,7 +1197,15 @@ isr_rx_ctrl:
 		 *  there after.
 		 */
 		lll->ctrl = 1U;
+
+		/* Under interleaved packing the walker has already wrapped
+		 * bis_curr back to the first BIS here: restore num_bis so
+		 * this control subevent's nse/HCTO calc and the
+		 * bis_curr == num_bis completion check use the right value
+		 * (no-op for sequential packing). */
+		lll->bis_curr = lll->num_bis;
 		sniffer_tap_mark_ctrl_set();
+		sniffer_tap_mark_bis_curr_max();
 
 		/* control subevent to use bis = 0 and se_n = 1 */
 		bis = 0U;
