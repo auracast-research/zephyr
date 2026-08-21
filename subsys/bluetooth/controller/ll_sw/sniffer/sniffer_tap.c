@@ -119,6 +119,8 @@ static uint16_t last_cssn_next;
 
 static uint32_t last_tap_event_counter = 0xffffffffU;
 
+static uint16_t bis_seq_ctr;
+
 /* LLL probe counters. */
 static atomic_t bis_max_marked;
 static atomic_t ctrl_check_reached;
@@ -143,6 +145,40 @@ static uint32_t cur_event_arm_miss;     /* arm_miss fires during current event *
 static atomic_t ctrl_probe_on;          /* debug: force-listen every event      */
 static atomic_t greedy_on;              /* debug: bypass "already received" skip */
 static atomic_t raw_enc_on;             /* sniff encrypted BIG without bcode     */
+static atomic_t payload_omit_on;        /* header-only capture: skip payload copy */
+
+/* prepare_cb latency accounting -- lll->latency_event at prepare time.
+ * 0 = we ran the event on schedule; >0 = we missed N events since the
+ * last successful prepare (peer's event_counter jumped that far). If
+ * this ever climbs mid-run, it means our ULL got behind and per-BIS
+ * PRN state (which is re-initialized from event_counter each prepare)
+ * jumps N events forward while ours starts N events behind */
+#define LATENCY_HIST_BINS 8U
+static atomic_t latency_events;         /* prepare_cb calls scored          */
+static atomic_t latency_max;            /* max latency observed             */
+static atomic_t latency_histogram[LATENCY_HIST_BINS];
+
+/* Window widening at prepare time: window_widening_event_us grows each
+ * event by ~ppm * iso_interval us and caps at (iso_int/2 - EVENT_IFS).
+ * If it saturates near the cap when coverage degrades, peer clock drift
+ * crossing our HCTO window is a likely mechanism. */
+static atomic_t widening_max_us;
+static atomic_t widening_last_us;
+
+/* Per-event slot-0 (nse=0, BIS1 subevent 0) capture accounting. If
+ * `events_with_slot0` tracks `events_prepared` closely, the LLL is
+ * catching the first subevent of every event; degradation is happening
+ * further into the walk. If it lags, some events start bad from nse=0
+ * itself, pointing to a sync-plane issue rather than mid-walk drift. */
+static atomic_t events_prepared;
+static atomic_t events_with_slot0;
+static uint8_t cur_event_slot0_seen;    /* reset at prepare, set at slot 0 RX */
+
+static uint32_t anchor_delta_min = UINT32_MAX;
+static uint32_t anchor_delta_max;
+static uint64_t anchor_delta_sum;
+static uint32_t anchor_delta_count;
+static uint32_t anchor_delta_last;
 
 static uint32_t probe_isr_max_cyc;
 static uint64_t probe_isr_sum_cyc;
@@ -411,6 +447,9 @@ bool sniffer_tap_greedy_get(void)        { return atomic_get(&greedy_on) != 0; }
 
 void sniffer_tap_raw_enc_set(bool on)    { atomic_set(&raw_enc_on, on ? 1 : 0); }
 bool sniffer_tap_raw_enc_get(void)       { return atomic_get(&raw_enc_on) != 0; }
+
+void sniffer_tap_payload_omit_set(bool on) { atomic_set(&payload_omit_on, on ? 1 : 0); }
+bool sniffer_tap_payload_omit_get(void)    { return atomic_get(&payload_omit_on) != 0; }
 
 void sniffer_tap_probe_isr_record(uint32_t cycles)
 {
@@ -710,6 +749,7 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 	/* Raw-encrypted sniff mode: the LLL configured the radio for
 	 * unencrypted RX (no CCM) */
 	const bool raw_enc = sniffer_tap_raw_enc_get();
+	const bool payload_omit = sniffer_tap_payload_omit_get();
 	if (raw_enc) {
 		rec->flags |= SNIFFER_TAP_FLAG_ENC;
 		rec->derived |= SNIFFER_TAP_DFLAG_CIPHERTEXT;
@@ -766,46 +806,52 @@ void sniffer_tap_rx_done(const struct lll_sync_iso *lll,
 		rec->pdu[1] = (uint8_t)payload_len;
 		rec->pdu_len = 2U + payload_len + copy_extra;
 
-		bool will_store = false;
-		if (!is_control_se && payload_len > 0U && crc_ok &&
-		    ull_iso_pdu_rx_alloc_peek(2U) != NULL) {
-			uint32_t stream_curr = lll->stream_curr;
-			uint32_t payload_index;
+		/* Header-only capture mode (`sniff payload_omit on`):
+		 * skip the payload copy entirely */
+		if (payload_omit) {
+			rec->flags |= SNIFFER_TAP_FLAG_PAYLOAD_OMITTED;
+		} else {
+			bool will_store = false;
+			if (!is_control_se && payload_len > 0U && crc_ok &&
+			    ull_iso_pdu_rx_alloc_peek(2U) != NULL) {
+				uint32_t stream_curr = lll->stream_curr;
+				uint32_t payload_index;
 
-			if (lll->ptc_curr > 0U) {
-				uint32_t ptx_idx = (uint32_t)lll->ptc_curr - 1U;
-				uint32_t ptx_group_idx = ptx_idx / lll->bn;
-				uint32_t ptx_payload_idx =
-					ptx_idx - ptx_group_idx * lll->bn;
-				uint32_t ptx_group_mult =
-					(ptx_group_idx + 1U) * lll->pto;
+				if (lll->ptc_curr > 0U) {
+					uint32_t ptx_idx = (uint32_t)lll->ptc_curr - 1U;
+					uint32_t ptx_group_idx = ptx_idx / lll->bn;
+					uint32_t ptx_payload_idx =
+						ptx_idx - ptx_group_idx * lll->bn;
+					uint32_t ptx_group_mult =
+						(ptx_group_idx + 1U) * lll->pto;
 
-				payload_index = ptx_payload_idx +
-						ptx_group_mult * lll->bn;
-			} else {
-				payload_index = lll->bn_curr - 1U;
-			}
-
-			uint32_t payload_offset =
-				((uint32_t)lll->latency_event * lll->bn) +
-				payload_index;
-			if (payload_offset < lll->payload_count_max &&
-			    stream_curr < BT_CTLR_SYNC_ISO_STREAM_MAX) {
-				uint32_t idx = lll->payload_tail + payload_offset;
-				if (idx >= lll->payload_count_max) {
-					idx -= lll->payload_count_max;
+					payload_index = ptx_payload_idx +
+							ptx_group_mult * lll->bn;
+				} else {
+					payload_index = lll->bn_curr - 1U;
 				}
-				will_store = (lll->payload[stream_curr][idx] == NULL);
-			}
-		}
 
-		if (will_store) {
-			rec->_deferred_raw = raw;
-			rec->_deferred_len = payload_len + copy_extra;
-		} else if (payload_len + copy_extra > 0U) {
-			memcpy(&rec->pdu[2],
-			       raw + PDU_BIS_LL_HEADER_SIZE,
-			       payload_len + copy_extra);
+				uint32_t payload_offset =
+					((uint32_t)lll->latency_event * lll->bn) +
+					payload_index;
+				if (payload_offset < lll->payload_count_max &&
+				    stream_curr < BT_CTLR_SYNC_ISO_STREAM_MAX) {
+					uint32_t idx = lll->payload_tail + payload_offset;
+					if (idx >= lll->payload_count_max) {
+						idx -= lll->payload_count_max;
+					}
+					will_store = (lll->payload[stream_curr][idx] == NULL);
+				}
+			}
+
+			if (will_store) {
+				rec->_deferred_raw = raw;
+				rec->_deferred_len = payload_len + copy_extra;
+			} else if (payload_len + copy_extra > 0U) {
+				memcpy(&rec->pdu[2],
+				       raw + PDU_BIS_LL_HEADER_SIZE,
+				       payload_len + copy_extra);
+			}
 		}
 	}
 

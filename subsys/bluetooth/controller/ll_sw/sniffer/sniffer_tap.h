@@ -208,6 +208,13 @@ void sniffer_tap_raw_enc_set(bool on);
 bool sniffer_tap_raw_enc_get(void);
 
 /*
+ * Header-only capture mode: when due to resources capturing every PDU in full
+ * isn't possible. rx_done() skips copying payload bytes entirely 
+ * only the 2-byte header is kept. */
+void sniffer_tap_payload_omit_set(bool on);
+bool sniffer_tap_payload_omit_get(void);
+
+/*
  * Cycle-counter profiling of the BIS RX ISR. Uses k_cycle_get_32() which
  * on Cortex-M reads DWT->CYCCNT (1 cycle). Two probe points are exposed:
  *   isr:   full lll_sync_iso.c:isr_rx() body, entry to exit
