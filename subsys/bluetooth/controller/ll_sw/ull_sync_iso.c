@@ -5,6 +5,7 @@
  */
 
 #include <zephyr/kernel.h>
+#include <zephyr/irq.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/bluetooth/hci_types.h>
 
@@ -418,6 +419,99 @@ void ull_sync_iso_stream_release(struct ll_sync_iso_set *sync_iso)
 	}
 
 	sync_iso->sync = NULL;
+}
+
+/* Find the established BIG sync that was created from the given PA sync. The
+ * back-pointer is set in ll_big_sync_create() and cleared in
+ * ull_sync_iso_stream_release(); timeout_reload is non-zero once established. */
+struct ll_sync_iso_set *ull_sync_iso_by_sync_get(struct ll_sync_set *sync)
+{
+	for (uint8_t h = 0U; h < CONFIG_BT_CTLR_SCAN_SYNC_ISO_SET; h++) {
+		struct ll_sync_iso_set *sync_iso = &ll_sync_iso[h];
+
+		if ((sync_iso->sync == sync) && sync_iso->timeout_reload) {
+			return sync_iso;
+		}
+	}
+
+	return NULL;
+}
+
+/* Follow encrypted channel-map updates via the cleartext BIGInfo.
+ *
+ * Called from the PA-report path every interval a BIGInfo is parsed. When
+ * channel-map following is enabled, track the cleartext BIGInfo channel map
+ * directly: whenever it differs from the running BIG sync's active map, stage
+ * it as a pending update. The existing isr_rx_done() apply path swaps it into
+ * data_chan_map at the next event boundary.
+ *
+ * We deliberately do NOT gate this on having just received a BIG control PDU.
+ * Hardware testing showed control-subevent reception is unreliable - and
+ * impossible once the BIS starts to desync - so gating on it stalls recovery:
+ * a missed control PDU means the new map is never applied, the BIS desyncs,
+ * which makes the next control PDU unreceivable too (a desync that lasts until
+ * we happen to catch a later control PDU). The PA sync stays up independently
+ * of the BIS, so BIGInfo keeps arriving even while the BIS is desynced; acting
+ * on it directly is what lets us recover.
+ *
+ * We apply on the FIRST differing BIGInfo rather than waiting for a second
+ * confirming read: the apply latency directly widens the transition loss, the
+ * broadcaster can change the map several times within one PA interval (a
+ * two-read filter would refuse to apply any of them and stall on the stale
+ * map), and a single corrupted-but-CRC-valid BIGInfo only costs ~one PA
+ * interval before the next BIGInfo corrects it (self-correcting).
+ *
+ * Only acts on the ciphertext scenario (encrypted BIG synced without the
+ * Broadcast Code, i.e. lll->enc == 0); with a real key the LLL decrypts
+ * BIG_CHANNEL_MAP_IND and applies updates natively. */
+void ull_sync_iso_chm_follow(struct ll_sync_set *sync, struct pdu_big_info *bi)
+{
+	uint8_t chm[PDU_CHANNEL_MAP_SIZE];
+	struct ll_sync_iso_set *sync_iso;
+	struct lll_sync_iso *lll;
+	uint8_t chan_count;
+	unsigned int key;
+
+	if (!sniffer_tap_chm_follow_get()) {
+		return;
+	}
+
+	sync_iso = ull_sync_iso_by_sync_get(sync);
+	if (!sync_iso) {
+		return;
+	}
+
+	lll = &sync_iso->lll;
+	if (lll->enc) {
+		return;
+	}
+
+	/* Parse the cleartext channel map exactly as ull_sync_iso_setup(). */
+	(void)memcpy(chm, bi->chm_phy, sizeof(chm));
+	chm[4] &= 0x1F;
+	chan_count = util_ones_count_get(chm, sizeof(chm));
+	if (chan_count < CHM_USED_COUNT_MIN) {
+		return;
+	}
+
+	/* Nothing to do if the map already matches the active one, or an update
+	 * is already staged (wait for isr_rx_done() to apply it). */
+	if ((memcmp(lll->data_chan_map, chm, sizeof(chm)) == 0) ||
+	    lll->chm_chan_count) {
+		return;
+	}
+
+	/* Stage as a pending update; order the write like isr_rx_ctrl_recv():
+	 * map and instant first, armed flag (chm_chan_count) last. The instant
+	 * is "now" so isr_rx_done() applies it at the next event boundary.
+	 * irq_lock() keeps the radio RX ISR from observing a half-written map. */
+	key = irq_lock();
+	(void)memcpy(lll->chm_chan_map, chm, sizeof(lll->chm_chan_map));
+	lll->ctrl_instant = (uint16_t)(lll->payload_count / lll->bn);
+	lll->chm_chan_count = chan_count;
+	irq_unlock(key);
+
+	sniffer_tap_note_chm_follow_applied();
 }
 
 void ull_sync_iso_setup(struct ll_sync_iso_set *sync_iso,

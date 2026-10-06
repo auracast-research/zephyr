@@ -577,6 +577,11 @@ void ull_scan_aux_setup(memq_link_t *link, struct node_rx_pdu *rx)
 		if (sync_iso) {
 			ull_sync_iso_setup(sync_iso, rx, ptr, acad_len);
 		}
+
+		/* Follow encrypted channel-map updates via this (cleartext)
+		 * BIGInfo on an already-established BIG sync. No-op unless
+		 * `sniff chmfollow` is on and a control PDU was just seen. */
+		ull_sync_iso_chm_follow(sync_set, bi);
 #endif /* CONFIG_BT_CTLR_SYNC_ISO */
 	}
 
@@ -2001,6 +2006,11 @@ void ull_scan_aux_setup(memq_link_t *link, struct node_rx_pdu *rx)
 		if (sync_iso) {
 			ull_sync_iso_setup(sync_iso, rx, ptr, acad_len);
 		}
+
+		/* Follow encrypted channel-map updates via this (cleartext)
+		 * BIGInfo on an already-established BIG sync. No-op unless
+		 * `sniff chmfollow` is on and a control PDU was just seen. */
+		ull_sync_iso_chm_follow(sync_set, bi);
 #endif /* CONFIG_BT_CTLR_SYNC_ISO */
 	}
 

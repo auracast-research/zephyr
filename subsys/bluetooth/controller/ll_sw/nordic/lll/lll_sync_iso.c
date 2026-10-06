@@ -754,6 +754,12 @@ static void isr_rx(void *param)
 			if (pdu->ll_id == PDU_BIS_LLID_CTRL) {
 				sniffer_tap_mark_ctrl_recv(*(const uint8_t *)pdu,
 							   pdu->len);
+				/* Diagnostic counter of observed control PDUs.
+				 * Works even on ciphertext (the LLID header is
+				 * plaintext). Channel-map following tracks the
+				 * cleartext BIGInfo directly and does not depend
+				 * on this. */
+				sniffer_tap_note_ctrl_seen();
 				isr_rx_ctrl_recv(lll, pdu);
 			}
 
@@ -1932,6 +1938,18 @@ static void isr_rx_iso_data_invalid(const struct lll_sync_iso *const lll,
 
 static void isr_rx_ctrl_recv(struct lll_sync_iso *lll, struct pdu_bis *pdu)
 {
+	/* Ciphertext forwarding mode (encrypted BIG synced without the
+	 * Broadcast Code): the control PDU payload is undecryptable, so its
+	 * opcode/chm/instant/reason bytes are garbage. Parsing them could stage
+	 * a bogus channel map or a spurious termination and desync us. Skip the
+	 * content parse entirely; the BIGInfo-follow path (armed via
+	 * sniffer_tap_note_ctrl_seen()) supplies the new channel map instead.
+	 * chmfollow is auto-enabled by both `sniff raw` and the bisquit bypass;
+	 * lll->enc == 0 means we did not derive a real key. */
+	if (sniffer_tap_chm_follow_get() && !lll->enc) {
+		return;
+	}
+
 	const uint8_t opcode = pdu->ctrl.opcode;
 
 	if (opcode == PDU_BIG_CTRL_TYPE_TERM_IND) {

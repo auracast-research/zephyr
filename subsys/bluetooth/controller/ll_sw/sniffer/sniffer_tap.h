@@ -215,6 +215,26 @@ void sniffer_tap_payload_omit_set(bool on);
 bool sniffer_tap_payload_omit_get(void);
 
 /*
+ * Follow encrypted channel-map updates via the cleartext BIGInfo.
+ *
+ * For an encrypted BIG synced without the Broadcast Code, the
+ * BIG_CHANNEL_MAP_IND control PDU cannot be decrypted, so the LLL never learns
+ * the new channel map and desyncs after the switch. When this is on, the
+ * PA-report path tracks the cleartext BIGInfo channel map directly and stages
+ * it into the running BIG sync when it changes. See ull_sync_iso_chm_follow().
+ */
+void sniffer_tap_chm_follow_set(bool on);
+bool sniffer_tap_chm_follow_get(void);
+
+/* Diagnostic: count BIG control PDUs observed on the wire (ISR context). */
+void sniffer_tap_note_ctrl_seen(void);
+uint32_t sniffer_tap_ctrl_seen_total(void);
+
+/* Count of channel maps applied to a running BIG sync from BIGInfo. */
+void sniffer_tap_note_chm_follow_applied(void);
+uint32_t sniffer_tap_chm_follow_applied(void);
+
+/*
  * Cycle-counter profiling of the BIS RX ISR. Uses k_cycle_get_32() which
  * on Cortex-M reads DWT->CYCCNT (1 cycle). Two probe points are exposed:
  *   isr:   full lll_sync_iso.c:isr_rx() body, entry to exit

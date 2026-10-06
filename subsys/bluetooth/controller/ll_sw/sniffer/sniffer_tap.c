@@ -147,6 +147,15 @@ static atomic_t greedy_on;              /* debug: bypass "already received" skip
 static atomic_t raw_enc_on;             /* sniff encrypted BIG without bcode     */
 static atomic_t payload_omit_on;        /* header-only capture: skip payload copy */
 
+/* Channel-map following for encrypted BIGs without the Broadcast Code.
+ * The BIG_CHANNEL_MAP_IND control PDU is encrypted and unparsable, but the
+ * cleartext BIGInfo carries the new channel map, which the PA-report path
+ * tracks directly (see ull_sync_iso_chm_follow). ctrl_seen_total just counts
+ * observed BIG control PDUs for diagnostics. */
+static atomic_t chm_follow_on;          /* follow chan-map updates via BIGInfo   */
+static atomic_t ctrl_seen_total;        /* diagnostic: BIG control PDUs observed */
+static atomic_t chm_follow_applied;     /* chan maps applied from BIGInfo         */
+
 /* prepare_cb latency accounting -- lll->latency_event at prepare time.
  * 0 = we ran the event on schedule; >0 = we missed N events since the
  * last successful prepare (peer's event_counter jumped that far). If
@@ -450,6 +459,16 @@ bool sniffer_tap_raw_enc_get(void)       { return atomic_get(&raw_enc_on) != 0; 
 
 void sniffer_tap_payload_omit_set(bool on) { atomic_set(&payload_omit_on, on ? 1 : 0); }
 bool sniffer_tap_payload_omit_get(void)    { return atomic_get(&payload_omit_on) != 0; }
+
+void sniffer_tap_chm_follow_set(bool on) { atomic_set(&chm_follow_on, on ? 1 : 0); }
+bool sniffer_tap_chm_follow_get(void)    { return atomic_get(&chm_follow_on) != 0; }
+
+/* Diagnostic: count BIG control PDUs observed on the wire (ISR context). */
+void sniffer_tap_note_ctrl_seen(void)      { atomic_inc(&ctrl_seen_total); }
+uint32_t sniffer_tap_ctrl_seen_total(void) { return atomic_get(&ctrl_seen_total); }
+
+void sniffer_tap_note_chm_follow_applied(void) { atomic_inc(&chm_follow_applied); }
+uint32_t sniffer_tap_chm_follow_applied(void)  { return atomic_get(&chm_follow_applied); }
 
 void sniffer_tap_probe_isr_record(uint32_t cycles)
 {
